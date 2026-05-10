@@ -1,9 +1,11 @@
 <div align="center">
 
-# Podimo to RSS
+# Podimo to RSS (CE)
 
 Podimo is a proprietary podcasting player that enables you to listen to various exclusive shows behind a paywall.
 This tool allows you to stream Podimo podcasts with your preferred podcast player, without having to use the Podimo app.
+
+This is a community fork of [ThijsRay/podimo](https://github.com/ThijsRay/podimo) maintained by [@midasvo](https://github.com/midasvo). It tracks upstream nightly via the `sync-upstream` workflow and publishes its own Docker images to `ghcr.io/midasvo/podimo-ce`.
 </div>
 
 ## Recommended installation for self-hosting
@@ -11,8 +13,8 @@ Make sure you have a recent Python 3 version installed, as this is required for 
 
 1. Clone this repository and enter the newly created directory
 ```sh
-git clone https://github.com/ThijsRay/podimo
-cd podimo
+git clone https://github.com/midasvo/podimo-ce
+cd podimo-ce
 ```
 
 2. Get the latest update and install it as a service with
@@ -38,7 +40,7 @@ A complete list of all configuration options can be found in the [.env.example f
 1. Pull the Docker image with
 
 ```sh
-docker pull ghcr.io/thijsray/podimo:latest
+docker pull ghcr.io/midasvo/podimo-ce:latest
 ```
 
 2. Run the Docker image.
@@ -50,7 +52,7 @@ docker run --rm \
     -e PODIMO_BIND_HOST=0.0.0.0:12104 \
     -p 12104:12104 \
     -v $(pwd)/cache:/src/cache \
-    ghcr.io/thijsray/podimo:latest
+    ghcr.io/midasvo/podimo-ce:latest
 ```
 
 3. Visit http://localhost:12104. You should see the site now!
