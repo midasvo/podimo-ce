@@ -171,12 +171,19 @@ async def not_found(error):
     )
 
 
+def _arg(args, name):
+    # Some downstream tools (e.g. Audiobookshelf) consume the feed URL as
+    # rendered HTML and don't decode entities, so `&amp;region=...` arrives as a
+    # parameter literally named `amp;region`. Accept either form.
+    return args.get(name) or args.get(f"amp;{name}")
+
+
 @app.route("/feed/<string:podcast_id>.xml")
 async def serve_basic_auth_feed(podcast_id):
     if LOCAL_CREDENTIALS:
         args = request.args
-        region = args.get("region")
-        locale = args.get("locale")
+        region = _arg(args, "region")
+        locale = _arg(args, "locale")
         return await serve_feed(PODIMO_EMAIL, PODIMO_PASSWORD, podcast_id, region, locale)
     else:
         auth = request.authorization
