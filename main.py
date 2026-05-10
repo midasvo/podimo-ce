@@ -302,7 +302,15 @@ async def addFeedEntry(fg, episode, session, locale):
     fe.title(episode["title"])
     fe.description(episode["description"])
     fe.pubDate(episode.get("publishDatetime", episode.get("datetime")))
-    fe.podcast.itunes_image(episode["imageUrl"])
+    image_url = episode.get("imageUrl")
+    if image_url:
+        # Podimo image URLs end in a signed query string, not a file extension.
+        # feedgen (and Apple's spec) require the URL to end in .jpg/.png — append
+        # a fragment that satisfies the check without affecting image fetches,
+        # since clients strip the fragment before the HTTP GET.
+        if not image_url.lower().endswith(('.jpg', '.png')):
+            image_url = image_url + '#.jpg'
+        fe.podcast.itunes_image(image_url)
 
     url, duration = extract_audio_url(episode)
     if url is None:
@@ -340,6 +348,8 @@ async def podcastsToRss(podcast_id, data, locale):
         image = podcast["images"]["coverImageUrl"]
         if image is None:
             image = last_episode['imageUrl']
+        if image and not image.lower().endswith(('.jpg', '.png')):
+            image = image + '#.jpg'
         fg.image(image)
 
         language = podcast["language"]
