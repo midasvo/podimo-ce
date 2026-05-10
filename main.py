@@ -182,8 +182,8 @@ def _arg(args, name):
 async def serve_basic_auth_feed(podcast_id):
     if LOCAL_CREDENTIALS:
         args = request.args
-        region = _arg(args, "region")
-        locale = _arg(args, "locale")
+        region = _arg(args, "region") or "nl"
+        locale = _arg(args, "locale") or "nl-NL"
         return await serve_feed(PODIMO_EMAIL, PODIMO_PASSWORD, podcast_id, region, locale)
     else:
         auth = request.authorization
