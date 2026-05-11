@@ -158,7 +158,7 @@ async def index():
                 password = quote(str(password), safe="")             
                 url = f"{PODIMO_PROTOCOL}://{username}:{password}@{PODIMO_HOSTNAME}/feed/{podcast_id}.xml?{randomHexId(10)}&region={region}&locale={locale}"
             
-            logging.debug(f"Created an URL: {url}.")
+            logging.debug(f"Created feed URL for podcast {podcast_id} (region={region}, locale={locale}, local_credentials={LOCAL_CREDENTIALS}).")
             return await render_template("feed_location.html", url=url)
 
     return await render_template("index.html", error=error, locales=LOCALES, regions=REGIONS, need_credentials=not(LOCAL_CREDENTIALS))
