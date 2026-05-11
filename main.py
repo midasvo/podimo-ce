@@ -66,7 +66,10 @@ def allow_cors(response):
 
     # Only cache successful responses. Caching 401/404/410/500 on every CDN/
     # proxy for 15 minutes turns a transient upstream blip into a sticky outage.
-    if 200 <= response.status_code < 300:
+    # /healthz must never be cached so liveness probes always reflect current state.
+    if request.path == "/healthz":
+        response.headers.set('Cache-Control', 'no-store')
+    elif 200 <= response.status_code < 300:
         response.headers.set('Cache-Control', 'max-age=900')
     else:
         response.headers.set('Cache-Control', 'no-store')
@@ -166,6 +169,11 @@ async def index():
             return await render_template("feed_location.html", url=url)
 
     return await render_template("index.html", error=error, locales=LOCALES, regions=REGIONS, need_credentials=not(LOCAL_CREDENTIALS))
+
+
+@app.route("/healthz", methods=["GET"])
+async def healthz():
+    return Response('{"status":"ok"}', 200, {"Content-Type": "application/json"})
 
 
 @app.errorhandler(404)
