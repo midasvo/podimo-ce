@@ -27,7 +27,6 @@ from feedgen.feed import FeedGenerator
 from mimetypes import guess_type
 from aiohttp import ClientSession, CookieJar, ClientTimeout
 from quart import Quart, Response, render_template, request
-from hashlib import sha256
 from hypercorn.config import Config
 from hypercorn.asyncio import serve
 from urllib.parse import quote
@@ -200,13 +199,6 @@ def split_username_region_locale(string):
         return tuple(s)
     else:
         return (s[0], 'nl', 'nl-NL')
-
-
-def token_key(username, password):
-    key = sha256(
-        b"~".join([username.encode("utf-8"), password.encode("utf-8")])
-    ).hexdigest()
-    return key
 
 
 async def serve_feed(username, password, podcast_id, region, locale):
