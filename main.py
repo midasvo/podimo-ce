@@ -241,7 +241,7 @@ async def serve_feed(username, password, podcast_id, region, locale):
             )
         except Exception as e:
             exception = str(e)
-            if "Podcast not found" in exception:
+            if "not found" in exception.lower():
                 return Response(
                     "Podcast not found. Are you sure you have the correct ID?", 404, {}
                 )
@@ -268,10 +268,11 @@ async def urlHeadInfo(session, id, url, locale):
                 content_type, _ = guess_type(url)
                 if 'content-length' in response.headers:
                     content_length = response.headers['content-length']
-                if content_type is None and 'content-type' in response.headers:
-                    content_type = response.headers['content-type']
-                else:
-                    content_type = 'audio/mpeg'
+                if content_type is None:
+                    if 'content-type' in response.headers:
+                        content_type = response.headers['content-type']
+                    else:
+                        content_type = 'audio/mpeg'
                 cache.insertIntoHeadCache(id, content_length, content_type)
                 return (content_length, content_type)
 
@@ -374,9 +375,13 @@ async def podcastsToRss(podcast_id, data, locale):
 
     async with ClientSession() as session:
         for chunk in chunks(episodes, 5):
-            await asyncio.gather(
-                *[addFeedEntry(fg, episode, session, locale) for episode in chunk]
+            results = await asyncio.gather(
+                *[addFeedEntry(fg, episode, session, locale) for episode in chunk],
+                return_exceptions=True
             )
+            for episode, result in zip(chunk, results):
+                if isinstance(result, Exception):
+                    logging.warning(f"Failed to add feed entry for episode {episode['id']}: {result}")
 
     feed = fg.rss_str(pretty=True)
     return feed
