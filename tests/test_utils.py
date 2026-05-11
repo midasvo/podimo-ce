@@ -45,7 +45,7 @@ def test_token_key_is_64_char_hex_sha256():
 
 @pytest.mark.parametrize(
     "addr",
-    ["a@b.com", "foo+tag@bar.co.uk"],
+    ["a@b.com", "foo+tag@bar.co.uk", "a@b.c.d"],
 )
 def test_is_correct_email_address_accepts_valid(addr):
     assert is_correct_email_address(addr) is True
@@ -56,21 +56,12 @@ def test_is_correct_email_address_accepts_valid(addr):
     [
         "",
         "no-at-sign",
-        # parseaddr quirk: a bare "@" doesn't parse as an address at all
-        # (returns ('', '')), so this is False.
         "@",
-        # parseaddr quirk: "a@" likewise fails to parse; returns ('', '').
         "a@",
+        "@b",
+        "user@localhost",
+        "user@.com",
     ],
 )
 def test_is_correct_email_address_rejects_clearly_invalid(addr):
     assert is_correct_email_address(addr) is False
-
-
-def test_is_correct_email_address_parseaddr_quirk_at_b_is_accepted():
-    # parseaddr quirk: "@b" actually parses to ('', '@b') — there's an "@"
-    # in the address slot, so the current implementation returns True even
-    # though "@b" is obviously not a valid email. Document this so a future
-    # tightening of the check (e.g. a real regex) deliberately breaks this
-    # test instead of silently changing behavior.
-    assert is_correct_email_address("@b") is True

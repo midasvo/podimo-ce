@@ -17,11 +17,13 @@
 # See the Licence for the specific language governing
 # permissions and limitations under the Licence.
 
-from email.utils import parseaddr
+import re
 from random import choice, randint
 from hashlib import sha256
 import asyncio
 from functools import wraps, partial
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def randomHexId(length: int):
     string = []
@@ -45,7 +47,7 @@ def token_key(username, password):
 
 # Verify if it is actually an email address
 def is_correct_email_address(username):
-    return "@" in parseaddr(username)[1]
+    return _EMAIL_RE.fullmatch(username) is not None
 
 
 def generateHeaders(authorization, locale):
