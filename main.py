@@ -105,6 +105,10 @@ def initialize_client(username: str, password: str, region: str, locale: str) ->
     return client
 
 async def check_auth(username, password, region, locale, scraper):
+    # Only ValueError represents genuinely bad credentials (malformed email in
+    # PodimoClient.__init__, or rejection from podimoLogin). Network failures,
+    # Cloudflare blocks, and upstream GraphQL errors propagate so the caller
+    # can distinguish "wrong password" (401) from "upstream unavailable" (503).
     try:
         client = initialize_client(username, password, region, locale)
         if client.token:
@@ -114,11 +118,11 @@ async def check_auth(username, password, region, locale, scraper):
         cache.insertIntoTokenCache(client.key, client.token)
         return client
 
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
+    except ValueError as e:
+        logging.info(f"Auth rejected: {e}")
         if DEBUG:
             traceback.print_exc()
-    return None
+        return None
 
 podcast_id_pattern = re.compile(r"[0-9a-fA-F\-]+")
 
@@ -232,7 +236,21 @@ async def serve_feed(username, password, podcast_id, region, locale):
         logging.debug(f"Blocked! Podcast {podcast_id} is on local block list")
         return Response("Podcast is gone", 410, {}) 
     
-    client = await check_auth(username, password, region, locale, scraper)
+    try:
+        client = await check_auth(username, password, region, locale, scraper)
+    except ValueError as e:
+        # Defensive: check_auth already catches ValueError, but if it ever
+        # leaks one (or is replaced/wrapped), bad creds still map to 401.
+        logging.info(f"Auth rejected at call site: {e}")
+        return authenticate()
+    except Exception as e:
+        # check_auth only swallows ValueError (bad creds). Anything else here
+        # is a transient upstream/network failure — return 503 so clients
+        # retry instead of showing the user a misleading 401.
+        logging.error(f"Upstream auth failure: {e}")
+        if DEBUG:
+            traceback.print_exc()
+        return Response("Upstream temporarily unavailable, please retry", 503, {})
     if not client:
         return authenticate()
 
