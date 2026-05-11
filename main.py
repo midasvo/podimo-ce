@@ -40,13 +40,6 @@ import traceback
 app = Quart(__name__)
 proxies = dict()
 
-#Setup logging
-logging.basicConfig(
-    format="%(levelname)s | %(asctime)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%SZ",
-    level=logging.INFO,
-)
-
 def example():
     return f"""Example
 ------------
