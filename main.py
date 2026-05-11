@@ -25,7 +25,7 @@ from os import getenv
 from podimo.client import PodimoClient
 from feedgen.feed import FeedGenerator
 from mimetypes import guess_type
-from aiohttp import ClientSession, CookieJar, ClientTimeout
+from aiohttp import ClientSession, ClientError, CookieJar, ClientTimeout
 from quart import Quart, Response, render_template, request
 from hypercorn.config import Config
 from hypercorn.asyncio import serve
@@ -260,12 +260,12 @@ async def urlHeadInfo(session, id, url, locale):
                 cache.insertIntoHeadCache(id, content_length, content_type)
                 return (content_length, content_type)
 
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, ClientError) as exc:
             if attempt < retries - 1:
-                logging.info(f"Retrying HEAD request to {url} (Attempt {attempt + 2})")
-                await asyncio.sleep(1)  # Wait for 1 second before retrying
+                logging.info(f"Retrying HEAD {url} after {type(exc).__name__} (attempt {attempt + 2}/{retries})")
+                await asyncio.sleep(2 ** attempt)
             else:
-                logging.error(f"All retries failed for HEAD request to {url}")
+                logging.error(f"All retries failed for HEAD request to {url} ({type(exc).__name__})")
                 raise  # Re-raise the last exception if all retries fail
 
 
