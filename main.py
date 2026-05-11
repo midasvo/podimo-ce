@@ -304,10 +304,8 @@ async def urlHeadInfo(session, id, url, locale):
             async with session.head(url, allow_redirects=True,
                                     headers=generateHeaders(None, locale),
                                     timeout=timeout) as response:
-                content_length = 0
                 content_type, _ = guess_type(url)
-                if 'content-length' in response.headers:
-                    content_length = response.headers['content-length']
+                content_length = response.headers.get('content-length', '0')
                 if content_type is None:
                     if 'content-type' in response.headers:
                         content_type = response.headers['content-type']
