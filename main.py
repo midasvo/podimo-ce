@@ -39,6 +39,7 @@ import traceback
 # Setup Quart, used for serving the web pages
 app = Quart(__name__)
 proxies = dict()
+scraper = cloudscraper.create_scraper()
 
 def example():
     return f"""Example
@@ -212,26 +213,24 @@ async def serve_feed(username, password, podcast_id, region, locale):
         logging.debug(f"Blocked! Podcast {podcast_id} is on local block list")
         return Response("Podcast is gone", 410, {}) 
     
-    with cloudscraper.create_scraper() as scraper:
-        scraper.proxies = proxies
-        client = await check_auth(username, password, region, locale, scraper)
-        if not client:
-            return authenticate()
+    client = await check_auth(username, password, region, locale, scraper)
+    if not client:
+        return authenticate()
 
-        # Get a list of valid podcasts
-        try:
-            podcasts = await podcastsToRss(
-                podcast_id, await client.getPodcasts(podcast_id, scraper), locale
+    # Get a list of valid podcasts
+    try:
+        podcasts = await podcastsToRss(
+            podcast_id, await client.getPodcasts(podcast_id, scraper), locale
+        )
+    except Exception as e:
+        exception = str(e)
+        if "not found" in exception.lower():
+            return Response(
+                "Podcast not found. Are you sure you have the correct ID?", 404, {}
             )
-        except Exception as e:
-            exception = str(e)
-            if "not found" in exception.lower():
-                return Response(
-                    "Podcast not found. Are you sure you have the correct ID?", 404, {}
-                )
-            logging.error(f"Error while fetching podcasts: {exception}")
-            return Response("Something went wrong while fetching the podcasts", 500, {})
-        return Response(podcasts, mimetype="text/xml")
+        logging.error(f"Error while fetching podcasts: {exception}")
+        return Response("Something went wrong while fetching the podcasts", 500, {})
+    return Response(podcasts, mimetype="text/xml")
 
 
 async def urlHeadInfo(session, id, url, locale):
@@ -385,6 +384,7 @@ async def main():
         global proxies
         logging.info(f"Running with https proxy defined in environmental variable HTTP_PROXY: {HTTP_PROXY}")
         proxies['https'] = HTTP_PROXY
+        scraper.proxies = proxies
     await spawn_web_server()
 
 if __name__ == "__main__":
