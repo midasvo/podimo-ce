@@ -66,7 +66,12 @@ class PodimoClient:
             raise RuntimeError(f"Could not receive response for query: {query.strip()[:30]}...")
         if response.status_code != 200:
             raise RuntimeError(f"Podimo returned an error code. Response code was: {response.status_code} for query \"{query.strip()[:30]}...\"")
-        result = response.json()["data"]
+        body = response.json()
+        errors = body.get("errors")
+        if errors:
+            messages = "; ".join(error.get("message", "") for error in errors)
+            raise RuntimeError(f"GraphQL error: {messages}")
+        result = body.get("data")
         if result is None:
             raise RuntimeError(f"Podimo returned no valid data for query {query.strip()[:30]}")
         return result

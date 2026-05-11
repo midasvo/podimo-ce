@@ -241,7 +241,7 @@ async def serve_feed(username, password, podcast_id, region, locale):
             )
         except Exception as e:
             exception = str(e)
-            if "Podcast not found" in exception:
+            if "not found" in exception.lower():
                 return Response(
                     "Podcast not found. Are you sure you have the correct ID?", 404, {}
                 )
