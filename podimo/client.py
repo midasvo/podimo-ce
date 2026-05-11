@@ -123,7 +123,7 @@ class PodimoClient:
             await self.getOnboardingId(scraper)
 
             headers = self.generateHeaders(self.preauth_token)
-            logging.debug(f"AuthorizationAuthorize user: {self.username}")
+            logging.debug(f"AuthorizationAuthorize user: {self.key[:8]}")
             query = """
                 query AuthorizationAuthorize($email: String!, $password: String!, $locale: String!, $preregisterId: String) {
                     tokenWithCredentials(
