@@ -57,9 +57,20 @@ a tool like https://gchq.github.io/CyberChef/#recipe=URL_Encode(true)
 
 @app.after_request
 def allow_cors(response):
-    response.headers.set('Access-Control-Allow-Origin', '*')
-    response.headers.set('Access-Control-Allow-Methods', 'GET, POST')
-    response.headers.set('Cache-Control', 'max-age=900')
+    # Scope CORS to safe, read-only feed fetches. The form endpoint `/` must
+    # stay same-origin (POSTing credentials cross-origin would be unsafe), and
+    # POST is never a legitimate cross-origin operation on this app.
+    if request.method in ('GET', 'HEAD') and request.path.startswith('/feed/'):
+        response.headers.set('Access-Control-Allow-Origin', '*')
+        response.headers.set('Access-Control-Allow-Methods', 'GET, HEAD')
+
+    # Only cache successful responses. Caching 401/404/410/500 on every CDN/
+    # proxy for 15 minutes turns a transient upstream blip into a sticky outage.
+    if 200 <= response.status_code < 300:
+        response.headers.set('Cache-Control', 'max-age=900')
+    else:
+        response.headers.set('Cache-Control', 'no-store')
+
     logging.debug(f"Incoming {request.method} {request.path} from User-Agent {request.user_agent} at {request.remote_addr}.")
     return response
 
