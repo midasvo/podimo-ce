@@ -67,7 +67,7 @@ def allow_cors(response):
     response.headers.set('Access-Control-Allow-Origin', '*')
     response.headers.set('Access-Control-Allow-Methods', 'GET, POST')
     response.headers.set('Cache-Control', 'max-age=900')
-    logging.debug(f"Incoming {request.method} request for '{request.url}' from User-Agent {request.user_agent} at {request.remote_addr}.")
+    logging.debug(f"Incoming {request.method} {request.path} from User-Agent {request.user_agent} at {request.remote_addr}.")
     return response
 
 def authenticate():
