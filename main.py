@@ -209,7 +209,6 @@ def token_key(username, password):
     return key
 
 
-@app.route("/feed/<string:username>/<string:password>/<string:podcast_id>.xml")
 async def serve_feed(username, password, podcast_id, region, locale):
     
     logging.debug(f"Feed request for podcast {podcast_id} from IP {request.remote_addr} with User-Agent:{request.user_agent}.")
