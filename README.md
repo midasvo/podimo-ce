@@ -60,6 +60,14 @@ docker run --rm \
 ## Configuration
 A complete list of all configuration options can be found in the [.env.example file](.env.example)
 
+## Running tests
+Dev-only deps (pytest, pytest-asyncio, ruff) live in `requirements-dev.txt`.
+```sh
+pip install -r requirements-dev.txt
+pytest
+ruff check .
+```
+
 ## Bot detection
 Depending on your usage patterns, it might be necessary to bypass Podimo's anti-bot mechanisms.
 This can be done through a Zenrows, ScraperAPI or a generic HTTP proxy.

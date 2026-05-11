@@ -107,11 +107,17 @@ logging.basicConfig(
 )
 
 # Load block list from file '.block-list' if it exists
-BLOCKED = set()
-if os.path.exists(BLOCK_LIST_FILE):
-    with open (BLOCK_LIST_FILE, 'r') as file:
+def load_block_list(path: str) -> set[str]:
+    blocked: set[str] = set()
+    if not os.path.exists(path):
+        return blocked
+    with open(path, 'r') as file:
         for line in file:
             line = line.strip()
-            if line and not line.startswith('#'): 
+            if line and not line.startswith('#'):
                 line = line.split(' ', 1)[0]
-                BLOCKED.add(line)
+                blocked.add(line)
+    return blocked
+
+
+BLOCKED = load_block_list(BLOCK_LIST_FILE)
