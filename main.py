@@ -268,10 +268,11 @@ async def urlHeadInfo(session, id, url, locale):
                 content_type, _ = guess_type(url)
                 if 'content-length' in response.headers:
                     content_length = response.headers['content-length']
-                if content_type is None and 'content-type' in response.headers:
-                    content_type = response.headers['content-type']
-                else:
-                    content_type = 'audio/mpeg'
+                if content_type is None:
+                    if 'content-type' in response.headers:
+                        content_type = response.headers['content-type']
+                    else:
+                        content_type = 'audio/mpeg'
                 cache.insertIntoHeadCache(id, content_length, content_type)
                 return (content_length, content_type)
 
