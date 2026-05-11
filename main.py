@@ -27,7 +27,6 @@ from feedgen.feed import FeedGenerator
 from mimetypes import guess_type
 from aiohttp import ClientSession, CookieJar, ClientTimeout
 from quart import Quart, Response, render_template, request
-from hashlib import sha256
 from hypercorn.config import Config
 from hypercorn.asyncio import serve
 from urllib.parse import quote
@@ -40,13 +39,6 @@ import traceback
 # Setup Quart, used for serving the web pages
 app = Quart(__name__)
 proxies = dict()
-
-#Setup logging
-logging.basicConfig(
-    format="%(levelname)s | %(asctime)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%SZ",
-    level=logging.INFO,
-)
 
 def example():
     return f"""Example
@@ -202,14 +194,6 @@ def split_username_region_locale(string):
         return (s[0], 'nl', 'nl-NL')
 
 
-def token_key(username, password):
-    key = sha256(
-        b"~".join([username.encode("utf-8"), password.encode("utf-8")])
-    ).hexdigest()
-    return key
-
-
-@app.route("/feed/<string:username>/<string:password>/<string:podcast_id>.xml")
 async def serve_feed(username, password, podcast_id, region, locale):
     
     logging.debug(f"Feed request for podcast {podcast_id} from IP {request.remote_addr} with User-Agent:{request.user_agent}.")
@@ -401,8 +385,7 @@ async def main():
         global proxies
         logging.info(f"Running with https proxy defined in environmental variable HTTP_PROXY: {HTTP_PROXY}")
         proxies['https'] = HTTP_PROXY
-    tasks = [spawn_web_server()]
-    await asyncio.gather(*tasks)
+    await spawn_web_server()
 
 if __name__ == "__main__":
     if DEBUG:

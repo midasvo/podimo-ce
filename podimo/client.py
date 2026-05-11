@@ -241,5 +241,5 @@ class PodimoClient:
         return fullResult
 
     def getPodcastName (self, podcast):
-        return list(podcast.values())[1]["title"]
+        return podcast["podcast"]["title"]
        
