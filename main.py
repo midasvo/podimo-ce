@@ -380,8 +380,7 @@ async def main():
         global proxies
         logging.info(f"Running with https proxy defined in environmental variable HTTP_PROXY: {HTTP_PROXY}")
         proxies['https'] = HTTP_PROXY
-    tasks = [spawn_web_server()]
-    await asyncio.gather(*tasks)
+    await spawn_web_server()
 
 if __name__ == "__main__":
     if DEBUG:
