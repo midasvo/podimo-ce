@@ -17,7 +17,13 @@
 # See the Licence for the specific language governing
 # permissions and limitations under the Licence.
 
-from podimo.config import *
+from podimo.config import (
+    CACHE_DIR,
+    HEAD_CACHE_TIME,
+    PODCAST_CACHE_TIME,
+    STORE_TOKENS_ON_DISK,
+    TOKEN_CACHE_TIME,
+)
 from typing import Dict, Tuple
 from time import time
 from diskcache import Cache

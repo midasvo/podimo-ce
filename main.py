@@ -30,7 +30,27 @@ from quart import Quart, Response, render_template, request
 from hypercorn.config import Config
 from hypercorn.asyncio import serve
 from urllib.parse import quote
-from podimo.config import *
+from podimo.config import (
+    BLOCKED,
+    CACHE_DIR,
+    DEBUG,
+    HEAD_CACHE_TIME,
+    HTTP_PROXY,
+    LOCAL_CREDENTIALS,
+    LOCALES,
+    PODCAST_CACHE_TIME,
+    PODIMO_BIND_HOST,
+    PODIMO_EMAIL,
+    PODIMO_HOSTNAME,
+    PODIMO_PASSWORD,
+    PODIMO_PROTOCOL,
+    PUBLIC_FEEDS,
+    REGIONS,
+    SCRAPER_API,
+    STORE_TOKENS_ON_DISK,
+    TOKEN_CACHE_TIME,
+    ZENROWS_API,
+)
 from podimo.utils import generateHeaders, randomHexId
 import podimo.cache as cache
 import cloudscraper
