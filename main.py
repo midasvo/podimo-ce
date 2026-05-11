@@ -375,9 +375,13 @@ async def podcastsToRss(podcast_id, data, locale):
 
     async with ClientSession() as session:
         for chunk in chunks(episodes, 5):
-            await asyncio.gather(
-                *[addFeedEntry(fg, episode, session, locale) for episode in chunk]
+            results = await asyncio.gather(
+                *[addFeedEntry(fg, episode, session, locale) for episode in chunk],
+                return_exceptions=True
             )
+            for episode, result in zip(chunk, results):
+                if isinstance(result, Exception):
+                    logging.warning(f"Failed to add feed entry for episode {episode['id']}: {result}")
 
     feed = fg.rss_str(pretty=True)
     return feed
