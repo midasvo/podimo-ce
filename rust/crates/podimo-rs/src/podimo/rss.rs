@@ -257,3 +257,70 @@ fn first_non_null_string(candidates: &[Option<&Value>]) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_audio_url_prefers_audio_block() {
+        let ep = json!({
+            "audio": {"url": "https://a/file.mp3", "duration": 42},
+            "streamMedia": {"url": "https://s/main.m3u8", "duration": 1},
+        });
+        assert_eq!(
+            extract_audio_url(&ep),
+            (Some("https://a/file.mp3".into()), 42)
+        );
+    }
+
+    #[test]
+    fn extract_audio_url_falls_back_to_stream_media_when_audio_empty() {
+        let ep = json!({
+            "audio": {"url": "", "duration": 0},
+            "streamMedia": {"url": "https://s/file.mp3", "duration": 99},
+        });
+        assert_eq!(
+            extract_audio_url(&ep),
+            (Some("https://s/file.mp3".into()), 99)
+        );
+    }
+
+    #[test]
+    fn extract_audio_url_rewrites_hls_to_mp3() {
+        let ep = json!({
+            "audio": null,
+            "streamMedia": {
+                "url": "https://hls-media.podimo.com/foo/bar/main.m3u8?sig=x",
+                "duration": 60
+            },
+        });
+        let (url, dur) = extract_audio_url(&ep);
+        assert_eq!(dur, 60);
+        let url = url.unwrap();
+        assert!(url.contains("audios"), "url should contain 'audios': {url}");
+        assert!(url.contains(".mp3"), "url should contain '.mp3': {url}");
+        assert!(!url.contains("hls-media"));
+        assert!(!url.contains("/main.m3u8"));
+    }
+
+    #[test]
+    fn extract_audio_url_returns_none_when_no_audio() {
+        let ep = json!({"audio": null, "streamMedia": null});
+        assert_eq!(extract_audio_url(&ep), (None, 0));
+    }
+
+    #[test]
+    fn first_non_null_string_skips_empty_and_null() {
+        let a = Value::Null;
+        let b = json!("");
+        let c = json!("found");
+        assert_eq!(
+            first_non_null_string(&[Some(&a), Some(&b), Some(&c)]),
+            Some("found".into())
+        );
+        assert_eq!(first_non_null_string(&[Some(&a), Some(&b)]), None);
+        assert_eq!(first_non_null_string(&[None, None]), None);
+    }
+}
