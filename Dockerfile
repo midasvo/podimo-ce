@@ -1,10 +1,31 @@
-FROM python:3.10-alpine
+# syntax=docker/dockerfile:1.7
+# Multi-stage build. Runtime image exposes port 12104 and the /healthz
+# healthcheck path, matching the Python service it replaces.
 
-WORKDIR /src
+FROM rust:1.95-slim-bookworm AS builder
 
-COPY requirements.txt /src/
-RUN apk add libxml2-dev libxslt-dev gcc libc-dev && pip3 install --no-cache-dir -r requirements.txt
+WORKDIR /build
 
-COPY . /src
+COPY Cargo.toml Cargo.lock rustfmt.toml clippy.toml ./
+COPY crates ./crates
 
-ENTRYPOINT [ "python3", "main.py" ]
+RUN cargo build --release --locked --bin podimo-rs
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /build/target/release/podimo-rs /usr/local/bin/podimo-rs
+COPY crates/podimo-rs/templates ./templates
+
+ENV PODIMO_BIND_HOST=0.0.0.0:12104
+EXPOSE 12104
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:12104/healthz | grep -q '"ok"' || exit 1
+
+ENTRYPOINT ["/usr/local/bin/podimo-rs"]
