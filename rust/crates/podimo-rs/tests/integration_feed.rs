@@ -9,25 +9,49 @@ use base64::Engine;
 use podimo_rs::{app, config::Config, AppState};
 use tokio::net::TcpListener;
 
-async fn boot() -> (SocketAddr, tokio::task::JoinHandle<()>) {
-    let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("CACHE_DIR", tmp.path());
-    std::env::remove_var("LOCAL_CREDENTIALS");
-    std::env::remove_var("PODIMO_EMAIL");
-    std::env::remove_var("PODIMO_PASSWORD");
-    std::env::remove_var("BLOCK_LIST_FILE");
+/// Build a Config without touching process env vars (so parallel tests don't
+/// race on the env). Each call gets its own tempdir for CACHE_DIR.
+fn make_test_config<F: FnOnce(&mut Config)>(tweak: F) -> Config {
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let mut config = Config {
+        hostname: "localhost:12104".into(),
+        bind_host: "127.0.0.1:12104".into(),
+        protocol: "http".into(),
+        http_proxy: None,
+        zenrows_api: None,
+        scraper_api: None,
+        cache_dir: cache_dir.path().to_string_lossy().to_string(),
+        block_list_file: "/dev/null".into(),
+        debug: false,
+        local_credentials: false,
+        podimo_email: None,
+        podimo_password: None,
+        store_tokens_on_disk: false,
+        token_cache_time: 60,
+        podcast_cache_time: 60,
+        head_cache_time: 60,
+        public_feeds: false,
+        graphql_url: "https://example.invalid/graphql".into(),
+    };
+    tweak(&mut config);
+    // Leak the tempdir so the cache dir persists for the test's lifetime.
+    std::mem::forget(cache_dir);
+    config
+}
 
-    let config = Config::from_env().unwrap();
+async fn boot() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    boot_with(|_| {}).await
+}
+
+async fn boot_with<F: FnOnce(&mut Config)>(tweak: F) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let config = make_test_config(tweak);
     let state = AppState::new(config).await.unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-
     let router = app(state).await.unwrap();
     let handle = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    // Forget the tempdir guard so it survives the entire test runtime.
-    std::mem::forget(tmp);
     (addr, handle)
 }
 
@@ -183,5 +207,157 @@ async fn unknown_path_returns_404_text_plain() {
     assert_eq!(resp.headers().get("content-type").unwrap(), "text/plain");
     let body = resp.text().await.unwrap();
     assert!(body.starts_with("404 Not found"));
+    handle.abort();
+}
+
+// --- middleware parity tests: ports tests/test_after_request_headers.py ---
+
+#[tokio::test]
+async fn get_root_has_no_cors_origin() {
+    // Python: test_get_root_has_no_cors_origin. Form endpoint is same-origin only.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .get(format!("http://{addr}/"))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+    assert!(resp.headers().get("access-control-allow-methods").is_none());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn post_root_has_no_cors_origin() {
+    // Python: test_post_root_has_no_cors_origin. POSTs must never be cross-origin.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .post(format!("http://{addr}/"))
+        .form(&[
+            ("email", ""),
+            ("password", ""),
+            ("podcast_id", ""),
+            ("region", ""),
+            ("locale", ""),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+    assert!(resp.headers().get("access-control-allow-methods").is_none());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn get_feed_advertises_get_head_but_not_post() {
+    // Python: test_get_feed_has_permissive_cors_without_post.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .get(format!(
+            "http://{addr}/feed/de9b2081-9fc5-489f-b9d3-d744ed9cab20.xml"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let allow_methods = resp
+        .headers()
+        .get("access-control-allow-methods")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
+    assert!(
+        !allow_methods.contains("POST"),
+        "POST must NOT be advertised: {allow_methods}"
+    );
+    assert!(
+        allow_methods.contains("GET"),
+        "GET must be advertised: {allow_methods}"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn two_xx_response_has_max_age_900_cache_control() {
+    // Python: test_2xx_response_has_max_age_cache_control.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .get(format!("http://{addr}/"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "max-age=900");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn four_oh_four_response_has_no_store_cache_control() {
+    // Python: test_404_response_has_no_store_cache_control.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .get(format!("http://{addr}/this-route-does-not-exist"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn bad_email_format_returns_401() {
+    // Python: test_check_auth_value_error_returns_401. PodimoClient::new rejects
+    // a malformed email (here: "not-an-email") with ClientError::InvalidCredentials,
+    // which maps to 401 with the same WWW-Authenticate header.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .get(format!(
+            "http://{addr}/feed/de9b2081-9fc5-489f-b9d3-d744ed9cab20.xml"
+        ))
+        // "not-an-email,nl,nl-NL" parses to a non-email username; PodimoClient::new
+        // rejects it. The 401 path is taken regardless of upstream connectivity.
+        .header(
+            "Authorization",
+            basic_auth_header("not-an-email,nl,nl-NL", "pw"),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+    assert!(resp
+        .headers()
+        .get("www-authenticate")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("Basic realm="));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn blocked_podcast_id_returns_410() {
+    // Python: test_blocked_podcast_returns_410.
+    // Write a block list file pointing at a specific podcast id, then verify the
+    // feed URL is short-circuited to 410 before any upstream call.
+    let blocklist = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(blocklist.path(), "de9b2081-9fc5-489f-b9d3-d744ed9cab20\n").unwrap();
+    let blocklist_path = blocklist.path().to_string_lossy().to_string();
+    // Leak the file handle to keep the file alive for the duration of the test.
+    std::mem::forget(blocklist);
+
+    let (addr, handle) = boot_with(|c| c.block_list_file = blocklist_path).await;
+    let resp = http_client()
+        .get(format!(
+            "http://{addr}/feed/de9b2081-9fc5-489f-b9d3-d744ed9cab20.xml"
+        ))
+        .header("Authorization", basic_auth_header("a@b.com,nl,nl-NL", "pw"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 410);
     handle.abort();
 }

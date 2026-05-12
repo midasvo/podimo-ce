@@ -19,8 +19,14 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/feed/:podcast_id", get(serve))
 }
 
-pub fn unauthorized_response() -> Response {
-    let mut resp = (StatusCode::UNAUTHORIZED, UNAUTHORIZED_BODY).into_response();
+pub fn unauthorized_response(hostname: &str) -> Response {
+    let body = format!(
+        "401 Unauthorized.\n\
+You need to login with the correct credentials for Podimo.\n\n\
+{}",
+        crate::handlers::not_found::example_block(hostname)
+    );
+    let mut resp = (StatusCode::UNAUTHORIZED, body).into_response();
     resp.headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
     resp.headers_mut().insert(
@@ -29,18 +35,6 @@ pub fn unauthorized_response() -> Response {
     );
     resp
 }
-
-const UNAUTHORIZED_BODY: &str = "401 Unauthorized.\n\
-You need to login with the correct credentials for Podimo.\n\n\
-Example\n\
-------------\n\
-Username: example@example.com\n\
-Password: this-is-my-password\n\
-Podcast ID: 12345-abcdef\n\n\
-The URL will be\n\
-https://example%40example.com:this-is-my-password@<hostname>/feed/12345-abcdef.xml\n\n\
-Note that the username and password should be URL encoded. This can be done with\n\
-a tool like https://gchq.github.io/CyberChef/#recipe=URL_Encode(true)\n";
 
 async fn serve(
     State(state): State<AppState>,
@@ -79,7 +73,7 @@ async fn serve(
                 let (username, region, locale) = split_username_region_locale(&user_field);
                 (username, password, region, locale)
             }
-            None => return unauthorized_response(),
+            None => return unauthorized_response(&state.config.hostname),
         }
     };
 
@@ -101,7 +95,7 @@ async fn serve(
     // Build/cache the client + token.
     let mut client = match PodimoClient::new(&username, &password, &region, &locale) {
         Ok(c) => c,
-        Err(_) => return unauthorized_response(),
+        Err(_) => return unauthorized_response(&state.config.hostname),
     };
     if let Some(token) = state.caches.tokens.get(&client.key).await {
         client.token = Some(token);
@@ -110,7 +104,9 @@ async fn serve(
             Ok(token) => {
                 state.caches.tokens.insert(client.key.clone(), token).await;
             }
-            Err(ClientError::InvalidCredentials(_)) => return unauthorized_response(),
+            Err(ClientError::InvalidCredentials(_)) => {
+                return unauthorized_response(&state.config.hostname)
+            }
             Err(err) => {
                 tracing::error!(target: "podimo", "upstream auth failure: {err}");
                 return (

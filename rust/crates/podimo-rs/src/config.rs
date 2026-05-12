@@ -32,6 +32,11 @@ pub struct Config {
     pub head_cache_time: u64,
 
     pub public_feeds: bool,
+
+    /// Podimo GraphQL endpoint. Overridable via `PODIMO_GRAPHQL_URL` so
+    /// integration tests can point at a wiremock server. Defaults to the
+    /// production URL — there is no operational reason to override in prod.
+    pub graphql_url: String,
 }
 
 impl Config {
@@ -64,6 +69,8 @@ impl Config {
             head_cache_time: env_u64("HEAD_CACHE_TIME", 7 * 60 * 60 * 24),
 
             public_feeds: env_bool("PUBLIC_FEEDS", false),
+
+            graphql_url: env_or("PODIMO_GRAPHQL_URL", "https://podimo.com/graphql"),
         })
     }
 

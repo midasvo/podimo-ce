@@ -103,7 +103,7 @@ impl<V> TtlCache<V>
 where
     V: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
-    async fn new(name: &'static str, dir: Option<PathBuf>, default_ttl: Duration) -> Self {
+    pub async fn new(name: &'static str, dir: Option<PathBuf>, default_ttl: Duration) -> Self {
         let cache = Cache::builder()
             .max_capacity(10_000)
             .time_to_live(default_ttl.saturating_mul(2))
@@ -142,16 +142,27 @@ where
         None
     }
 
-    /// Like [`get`] but never deletes an expired on-disk entry. Mirrors the
-    /// `getHeadEntry(delete=False)` use case in `podimo/cache.py`.
+    /// Like [`get`] but never deletes an expired on-disk entry. Mirrors
+    /// `getCacheEntry(..., delete=False)` in `podimo/cache.py`: expired entries
+    /// return `None`, but the underlying record (in moka and on disk) is kept.
+    /// Used for the HEAD cache, where we want to preserve the historical record
+    /// even when the TTL is up.
     pub async fn get_no_expire(&self, key: &str) -> Option<V> {
         if let Some(entry) = self.inner.get(key).await {
-            return Some(entry.value);
+            return if entry.expiry > now_secs() {
+                Some(entry.value)
+            } else {
+                None
+            };
         }
         if let Some(dir) = &self.dir {
             if let Some(entry) = read_entry::<V>(&entry_path(dir, key)).await {
                 self.inner.insert(key.to_string(), entry.clone()).await;
-                return Some(entry.value);
+                return if entry.expiry > now_secs() {
+                    Some(entry.value)
+                } else {
+                    None
+                };
             }
         }
         None
@@ -221,21 +232,66 @@ where
 mod tests {
     use super::*;
 
+    // Mirrors tests/test_cache.py from the Python side.
+
     #[tokio::test]
-    async fn in_memory_get_set_roundtrip() {
+    async fn insert_then_retrieve_before_expiry() {
+        // Python: test_insert_then_retrieve_before_expiry.
         let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_secs(60)).await;
         cache.insert("k".into(), "v".into()).await;
+        assert_eq!(cache.get("k").await, Some("v".into()));
+        // Hit doesn't evict the entry.
         assert_eq!(cache.get("k").await, Some("v".into()));
     }
 
     #[tokio::test]
-    async fn expired_entries_are_evicted() {
+    async fn missing_key_returns_none() {
+        // Python: test_missing_key_returns_none.
+        let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_secs(60)).await;
+        assert_eq!(cache.get("missing").await, None);
+    }
+
+    #[tokio::test]
+    async fn expired_entry_returns_none_and_is_evicted_from_memory() {
+        // Python: test_expired_entry_returns_none_and_is_deleted_by_default.
         let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_millis(50)).await;
         cache
             .insert_with_ttl("k".into(), "v".into(), Duration::from_millis(1))
             .await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(cache.get("k").await, None);
+        // After expiry, a subsequent direct check sees an evicted moka entry.
+        assert!(
+            cache.inner.get("k").await.is_none(),
+            "key should be invalidated"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_no_expire_returns_none_when_expired_but_keeps_key() {
+        // Python: test_expired_entry_with_delete_false_returns_none_but_keeps_key.
+        // getCacheEntry(..., delete=False) returns None on expiry but doesn't remove
+        // the underlying record (in-memory or on-disk).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let cache: TtlCache<String> =
+            TtlCache::new("test", Some(dir.clone()), Duration::from_secs(60)).await;
+        cache
+            .insert_with_ttl("k".into(), "v".into(), Duration::from_millis(1))
+            .await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert_eq!(cache.get_no_expire("k").await, None);
+        // Disk record is still present (not deleted on expiry-via-get_no_expire).
+        let on_disk = entry_path(&dir, "k");
+        assert!(on_disk.exists(), "on-disk record must survive expiry");
+    }
+
+    #[tokio::test]
+    async fn get_no_expire_returns_value_when_not_expired() {
+        let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_secs(60)).await;
+        cache.insert("k".into(), "v".into()).await;
+        assert_eq!(cache.get_no_expire("k").await, Some("v".into()));
     }
 
     #[tokio::test]
@@ -251,26 +307,5 @@ mod tests {
         let c2: TtlCache<String> =
             TtlCache::new("test", Some(dir.clone()), Duration::from_secs(60)).await;
         assert_eq!(c2.get("key1").await, Some("val1".into()));
-    }
-
-    #[tokio::test]
-    async fn get_no_expire_returns_stale_disk_entries() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().to_path_buf();
-        let c: TtlCache<String> =
-            TtlCache::new("test", Some(dir.clone()), Duration::from_secs(60)).await;
-        c.insert_with_ttl("k".into(), "v".into(), Duration::from_millis(1))
-            .await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert_eq!(
-            c.get("k").await,
-            None,
-            "regular get should treat as expired"
-        );
-        assert_eq!(
-            c.get_no_expire("k").await,
-            Some("v".into()),
-            "get_no_expire should still return the value"
-        );
     }
 }

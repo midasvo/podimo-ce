@@ -205,10 +205,24 @@ mod tests {
     }
 
     #[test]
-    fn random_hex_id_length() {
-        let s = random_hex_id(16);
-        assert_eq!(s.len(), 16);
-        assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
+    fn random_hex_id_length_and_alphabet() {
+        // Python: test_randomHexId_length_and_alphabet parametrized over [0, 1, 16, 64].
+        for n in [0, 1, 16, 64] {
+            let s = random_hex_id(n);
+            assert_eq!(s.len(), n, "random_hex_id({n}) wrong length");
+            assert!(
+                s.chars().all(|c| c.is_ascii_hexdigit()),
+                "random_hex_id({n}) leaked non-hex: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn token_key_distinct_for_different_inputs() {
+        // Python: test_token_key_distinct_for_different_inputs.
+        let base = token_key("user@example.com", "hunter2");
+        assert_ne!(token_key("other@example.com", "hunter2"), base);
+        assert_ne!(token_key("user@example.com", "different"), base);
     }
 
     #[test]

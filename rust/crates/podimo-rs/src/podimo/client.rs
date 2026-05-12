@@ -11,7 +11,8 @@ use crate::cache::TtlCache;
 use crate::config::Config;
 use crate::util::{generate_headers, is_correct_email, random_flyer_id, token_key};
 
-const GRAPHQL_URL: &str = "https://podimo.com/graphql";
+// The endpoint URL lives on `Config::graphql_url` so integration tests can
+// point at a wiremock server. Production callers leave it at the default.
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -321,7 +322,7 @@ async fn post_graphql(
         let url = format!(
             "https://api.scraperapi.com?api_key={}&url={}&keep_headers=true",
             urlencoding::encode(api_key),
-            urlencoding::encode(GRAPHQL_URL),
+            urlencoding::encode(config.graphql_url.as_str()),
         );
         let resp = build_request(scraper, &url, headers, &body).await?;
         (url, resp)
@@ -332,20 +333,22 @@ async fn post_graphql(
         let url = format!(
             "https://api.zenrows.com/v1/?apikey={}&url={}",
             urlencoding::encode(api_key),
-            urlencoding::encode(GRAPHQL_URL),
+            urlencoding::encode(config.graphql_url.as_str()),
         );
         let resp = build_request(scraper, &url, headers, &body).await?;
         (url, resp)
     } else {
-        let resp = build_request(scraper, GRAPHQL_URL, headers, &body).await?;
-        (GRAPHQL_URL.to_string(), resp)
+        let resp = build_request(scraper, config.graphql_url.as_str(), headers, &body).await?;
+        (config.graphql_url.as_str().to_string(), resp)
     };
 
     if !response.status().is_success() {
+        // Don't leak proxy API keys in the URL — log the configured destination
+        // host, never the formatted SCRAPER_API/ZENROWS_API URL that includes the key.
         return Err(ClientError::Upstream(format!(
-            "Podimo returned status {} for {}",
+            "Podimo returned status {} (target host: {})",
             response.status(),
-            url,
+            host_only(&url),
         )));
     }
 
@@ -366,6 +369,15 @@ async fn post_graphql(
     body.get("data")
         .cloned()
         .ok_or_else(|| ClientError::GraphQl("no data field in response".into()))
+}
+
+fn host_only(url: &str) -> String {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    after_scheme
+        .split(['/', '?'])
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 async fn build_request<B: Serialize>(

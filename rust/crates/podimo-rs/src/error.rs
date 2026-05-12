@@ -35,7 +35,11 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            AppError::Unauthorized => crate::handlers::feed::unauthorized_response(),
+            AppError::Unauthorized => {
+                // Called from contexts without AppState (no live hostname); use the
+                // hostname-less variant of the example body.
+                crate::handlers::feed::unauthorized_response("localhost:12104")
+            }
             AppError::UpstreamUnavailable(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Upstream temporarily unavailable, please retry",
