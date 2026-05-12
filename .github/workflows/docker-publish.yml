@@ -1,14 +1,17 @@
 name: Build and Push Docker Image
 
+# Publishes to ghcr.io/midasvo/podimo-rs from main pushes, version tags, or
+# manual dispatch. Build context is the repo root.
+
 on:
   workflow_dispatch:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
     tags: [ 'v*.*.*' ]
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: midasvo/podimo-rs
 
 jobs:
   build-and-push:
@@ -53,5 +56,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=podimo-rs
+          cache-to: type=gha,mode=max,scope=podimo-rs

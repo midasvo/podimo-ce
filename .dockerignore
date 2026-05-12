@@ -1,6 +1,4 @@
-LICENSE.txt
-README.md
-cache/**/*
-.env
-venv/**/*
-.block-list
+target/
+**/target/
+*.log
+.git/

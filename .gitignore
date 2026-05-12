@@ -1,16 +1,11 @@
-__pycache__
-venv
-cache
+# Local-only runtime state
+cache/
 .env
 .block-list
 
 # Rust build artefacts
-rust/target/
+target/
 **/*.rs.bk
-
-# Python tool caches
-.pytest_cache/
-.ruff_cache/
 
 # Claude Code agent state — local-only working trees, never tracked.
 .claude/

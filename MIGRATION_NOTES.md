@@ -3,6 +3,15 @@
 Companion to [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md). Captures the non-obvious
 decisions, deviations from Python behaviour, and known gaps.
 
+> **Historical note.** This document was written while Rust source lived under
+> `rust/` alongside the Python source. After PR #3, Python was removed and the
+> Cargo workspace was promoted to the repo root. References below to
+> `rust/Cargo.toml`, `rust/Dockerfile`, `rust/crates/...`, etc. now live at the
+> root (`Cargo.toml`, `Dockerfile`, `crates/...`). The Docker image is
+> `ghcr.io/midasvo/podimo-rs:latest`; the Python image
+> `ghcr.io/midasvo/podimo-ce` is frozen — its tags remain pullable but no new
+> builds are produced.
+
 ## Decisions
 
 ### Workspace shape

@@ -1,120 +1,190 @@
 <div align="center">
 
-# Podimo to RSS (CE)
+# podimo-rs
 
-Podimo is a proprietary podcasting player that enables you to listen to various exclusive shows behind a paywall.
-This tool allows you to stream Podimo podcasts with your preferred podcast player, without having to use the Podimo app.
+Self-hosted RSS proxy for [Podimo](https://podimo.com). Logs in to your account,
+fetches the episode list for a given show, and serves it as an RSS 2.0 feed your
+podcast player can subscribe to.
 
-This is a community fork of [ThijsRay/podimo](https://github.com/ThijsRay/podimo) maintained by [@midasvo](https://github.com/midasvo). It tracks upstream nightly via the `sync-upstream` workflow and publishes its own Docker images to `ghcr.io/midasvo/podimo-ce`.
+Rust rewrite of the original Python service (which was a fork of
+[ThijsRay/podimo](https://github.com/ThijsRay/podimo)). The HTTP contract, config
+surface, and `.block-list` format are preserved.
+
 </div>
 
-## Recommended installation for self-hosting
-Make sure you have a recent Python 3 version installed, as this is required for the steps below.
+## What it does
 
-1. Clone this repository and enter the newly created directory
-```sh
-git clone https://github.com/midasvo/podimo-ce
-cd podimo-ce
+You point your podcast player at a generated feed URL like
+
+```
+https://you%40example.com,nl,nl-NL:your-password@your-host/feed/<podcast-id>.xml
 ```
 
-2. Get the latest update and install it as a service with
-```sh
-make update
-make install
-```
+and it returns RSS 2.0 (with the iTunes namespace) that any normal podcast app
+can consume. The web form at `/` builds those URLs for you.
 
-3. Run the program with
-```sh
-make start
-```
+There are two modes, selected with the `LOCAL_CREDENTIALS` env var:
 
-4. Visit http://localhost:12104. You should see the site now! If you want to reach it from
-other machines, make sure to edit the configuration with
-```sh
-make config
-```
-A complete list of all configuration options can be found in the [.env.example file](.env.example)
+- **Multi-user (default)** — credentials travel in HTTP Basic on the feed URL,
+  so different users on the same instance see their own subscriptions.
+- **Single-user (`LOCAL_CREDENTIALS=true`)** — credentials come from the host
+  via `PODIMO_EMAIL` / `PODIMO_PASSWORD`. The form omits the email/password
+  inputs. Recommended for self-hosted instances with one user.
 
-## Instructions for self-hosting with Docker
+## Run with Docker
 
-1. Pull the Docker image with
-
-```sh
-docker pull ghcr.io/midasvo/podimo-ce:latest
-```
-
-2. Run the Docker image.
-Make sure you set the correct environment variables if you want to configure any variables.
-See [.env.example](.env.example) for a full list
-of configuration options.
 ```sh
 docker run --rm \
     -e PODIMO_BIND_HOST=0.0.0.0:12104 \
     -p 12104:12104 \
-    -v $(pwd)/cache:/src/cache \
-    ghcr.io/midasvo/podimo-ce:latest
+    -v $(pwd)/cache:/app/cache \
+    -e CACHE_DIR=/app/cache \
+    ghcr.io/midasvo/podimo-rs:latest
 ```
 
-3. Visit http://localhost:12104. You should see the site now!
+Then visit <http://localhost:12104>.
+
+Multi-arch images (linux/amd64, linux/arm64) are published from `main` and from
+version tags. See <https://github.com/midasvo/podimo-ce/pkgs/container/podimo-rs>
+for the tag list.
+
+### `docker-compose.yml`
+
+```yaml
+services:
+  podimo:
+    image: ghcr.io/midasvo/podimo-rs:latest
+    restart: unless-stopped
+    ports:
+      - "12104:12104"
+    environment:
+      PODIMO_BIND_HOST: 0.0.0.0:12104
+      PODIMO_HOSTNAME: podimo.example.com
+      PODIMO_PROTOCOL: https
+      # LOCAL_CREDENTIALS: "true"
+      # PODIMO_EMAIL: you@example.com
+      # PODIMO_PASSWORD: hunter2
+    volumes:
+      - ./cache:/app/cache
+```
+
+## Run from source
+
+Requires a Rust toolchain (1.80+). [rustup](https://rustup.rs) is the usual
+install path.
+
+```sh
+git clone https://github.com/midasvo/podimo-ce        # repo name is `podimo-ce`; binary is `podimo-rs`
+cd podimo-ce
+cp .env.example .env                                   # edit as needed
+cargo run --release --bin podimo-rs
+```
+
+The service binds `PODIMO_BIND_HOST` (default `127.0.0.1:12104`).
 
 ## Configuration
-A complete list of all configuration options can be found in the [.env.example file](.env.example)
 
-## Running tests
-Dev-only deps (pytest, pytest-asyncio, ruff) live in `requirements-dev.txt`.
-```sh
-pip install -r requirements-dev.txt
-pytest
-ruff check .
-```
+All knobs are env vars; see [`.env.example`](.env.example) for the full list
+with defaults. A `.env` file at the working directory is picked up
+automatically.
 
-## Bot detection
-Depending on your usage patterns, it might be necessary to bypass Podimo's anti-bot mechanisms.
-This can be done through a Zenrows, ScraperAPI or a generic HTTP proxy.
+The high-impact ones:
 
-### Setting up a Zenrows account
-You can create a free trial account for Zenrows
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `PODIMO_BIND_HOST` | `127.0.0.1:12104` | Listen address. Set `0.0.0.0:12104` inside containers. |
+| `PODIMO_HOSTNAME` | `localhost:12104` | Hostname shown in generated feed URLs (use your reverse-proxy hostname). |
+| `PODIMO_PROTOCOL` | `http` | Scheme shown in generated URLs (`https` once behind a TLS terminator). |
+| `LOCAL_CREDENTIALS` | `false` | If `true`, read creds from `PODIMO_EMAIL` / `PODIMO_PASSWORD` instead of HTTP Basic. |
+| `CACHE_DIR` | `./cache` | Root for the three on-disk caches (tokens, podcasts, head probes). |
+| `BLOCK_LIST_FILE` | `./.block-list` | One token per line; if any token is a substring of the request URL the feed returns `410`. See `.block-list.example`. |
 
-1. Go to [app.zenrows.com/register](https://app.zenrows.com/register) and create a free account
-2. Copy your API key and make sure to add it to the `ZENROWS_API` environment variable
+### Bot-protection bypass
 
-### Setting up a ScraperAPI account
-You can create a free trial account for ScraperAPI
+Podimo sits behind Cloudflare. Requests from datacenter IPs (most VPSes) are
+unreliable without one of:
 
-1. Go to [dashboard.scraperapi.com/signup](https://dashboard.scraperapi.com/signup) and create a free account
-2. Copy your API key and make sure to add it to the `SCRAPER_API` environment variable
+- `SCRAPER_API` — your ScraperAPI key. Requests get URL-rewritten through
+  `api.scraperapi.com`. Free tier at <https://dashboard.scraperapi.com/signup>.
+- `ZENROWS_API` — your ZenRows key. Requests get routed via `api.zenrows.com`.
+  Free trial at <https://app.zenrows.com/register>.
+- `HTTP_PROXY` — a residential HTTPS proxy URL.
+
+Only one of the three needs to be set; they're checked in that order. A
+residential IP (e.g. self-hosting from home) usually doesn't need any of them.
+
+## Endpoints
+
+| Path | Method | Body |
+| --- | --- | --- |
+| `/` | GET, POST | HTML form for building feed URLs. POST validates input and renders the resulting URL. |
+| `/feed/<podcast_id>.xml` | GET | RSS 2.0 feed. HTTP Basic auth in multi-user mode; env-var creds in single-user mode. |
+| `/healthz` | GET | `200 {"status":"ok"}` with `Cache-Control: no-store`. Container HEALTHCHECK target. |
+
+Caching policy:
+
+- `/healthz` is never cached.
+- 2xx responses get `Cache-Control: max-age=900`.
+- Everything else (401, 4xx, 5xx) gets `Cache-Control: no-store` — prevents
+  upstream blips from stickying through CDNs.
+
+CORS is scoped to `GET`/`HEAD` of `/feed/*` so podcast clients can fetch
+cross-origin without exposing the form's POST endpoint to other origins.
+
+## Block list
+
+Drop a `.block-list` file next to the service (or point `BLOCK_LIST_FILE` at
+one elsewhere). One token per line; `#` starts a comment; only the first
+whitespace-separated token of each line is used. Any line whose token appears
+anywhere in the request URL returns `410 GONE`. Tokens can be podcast IDs or
+the random 10-character cache-buster the form generates. See
+[`.block-list.example`](.block-list.example).
 
 ## Privacy
-The script keeps track of a few things in memory:
-- Your username and password, used to login and to create an access token. This is only used temporarily during a request itself.
-- A cryptographic hash that is calculated based on your username and password.
-- A Podimo access token, which is kept in memory for accessing pages after logging in.
 
-This data is not written to the disk (unless `STORE_TOKENS_ON_DISK` is set to true) and it is _never_ logged.
+What lives in memory (or on disk under `CACHE_DIR` when `STORE_TOKENS_ON_DISK`
+is true, which is the default):
 
-# License
+- Your email + password — only used to obtain a Podimo access token; never
+  written to logs.
+- `sha256("<email>~<password>")` — used as the cache key for your access token.
+- The Podimo access token itself.
+
+The token cache defaults to a 5-day TTL. Wipe `CACHE_DIR` to forget everything.
+
+## Development
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all --locked
+
+docker build -t podimo-rs:test .
+docker run --rm -p 12104:12104 podimo-rs:test
+curl http://127.0.0.1:12104/healthz   # → 200 {"status":"ok"}
+```
+
+CI runs the same three commands on every push and PR. The Docker image is
+published from `main` and version tags.
+
+## License
+
+EUPL-1.2.
+
 ```
 Copyright 2022-2023 Thijs Raymakers
+Copyright 2025-2026 Midas van Oene
 
-Licensed under the EUPL, Version 1.2 or – as soon they
-will be approved by the European Commission - subsequent
-versions of the EUPL (the "Licence");
-You may not use this work except in compliance with the
-Licence.
+Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
+the European Commission - subsequent versions of the EUPL (the "Licence");
+You may not use this work except in compliance with the Licence.
 You may obtain a copy of the Licence at:
 
 https://joinup.ec.europa.eu/software/page/eupl
 
-Unless required by applicable law or agreed to in
-writing, software distributed under the Licence is
-distributed on an "AS IS" basis,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-express or implied.
-See the Licence for the specific language governing
-permissions and limitations under the Licence.
+Unless required by applicable law or agreed to in writing, software
+distributed under the Licence is distributed on an "AS IS" basis,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the Licence for the specific language governing permissions and
+limitations under the Licence.
 ```
-
-# Support
-If you find this tool to be helpful, please consider buying me a coffee! It is greatly appreciated!
-
-<a href="https://www.buymeacoffee.com/thijsr"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=thijsr&button_colour=BD5FFF&font_colour=ffffff&font_family=Poppins&outline_colour=000000&coffee_colour=FFDD00" /></a>
