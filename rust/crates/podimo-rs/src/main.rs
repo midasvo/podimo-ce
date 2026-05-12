@@ -1,13 +1,12 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use podimo_rs::{app, config::Config, telemetry};
+use podimo_rs::{app, config::Config, telemetry, AppState};
 use tokio::net::TcpListener;
 use tokio::signal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load .env if present, then env overrides — same precedence as the Python service.
     let _ = dotenvy::dotenv();
     let config = Config::from_env().context("loading configuration")?;
 
@@ -24,7 +23,8 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("binding {addr}"))?;
     tracing::info!(target: "podimo", "listening on {}", listener.local_addr()?);
 
-    let app = app(config.into_shared()).await?;
+    let state = AppState::new(config).await?;
+    let app = app(state).await?;
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

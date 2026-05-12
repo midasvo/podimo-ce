@@ -6,10 +6,10 @@ use axum::http::{header, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::config::SharedConfig;
+use crate::state::AppState;
 
 pub async fn after_request(
-    State(_config): State<SharedConfig>,
+    State(_state): State<AppState>,
     req: Request<Body>,
     next: Next,
 ) -> Response {
@@ -20,7 +20,6 @@ pub async fn after_request(
     let is_success = response.status().is_success();
     let headers = response.headers_mut();
 
-    // CORS: only safe read-only fetches of /feed/* are cross-origin.
     if matches!(method, Method::GET | Method::HEAD) && path.starts_with("/feed/") {
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -32,7 +31,6 @@ pub async fn after_request(
         );
     }
 
-    // Cache-Control: never cache /healthz; cache 2xx for 15 minutes; everything else no-store.
     let cc = if path == "/healthz" {
         "no-store"
     } else if is_success {

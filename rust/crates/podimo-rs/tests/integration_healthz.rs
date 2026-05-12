@@ -3,21 +3,24 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use podimo_rs::{app, config::Config};
+use podimo_rs::{app, config::Config, AppState};
 use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn healthz_returns_200_json() {
-    let config = Config::from_env().expect("config").into_shared();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("CACHE_DIR", tmp.path());
+
+    let config = Config::from_env().expect("config");
+    let state = AppState::new(config).await.expect("state");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("addr");
 
-    let router = app(config).await.expect("build app");
+    let router = app(state).await.expect("build app");
     let handle = tokio::spawn(async move {
         axum::serve(listener, router).await.expect("serve");
     });
 
-    // Tiny wait isn't needed (axum serves as soon as the listener is bound).
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()

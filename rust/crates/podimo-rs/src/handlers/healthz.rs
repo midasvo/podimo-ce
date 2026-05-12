@@ -3,9 +3,9 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 
-use crate::config::SharedConfig;
+use crate::state::AppState;
 
-pub fn router() -> Router<SharedConfig> {
+pub fn router() -> Router<AppState> {
     Router::new().route("/healthz", get(healthz))
 }
 
