@@ -1,4 +1,4 @@
-pub mod feed;
-pub mod healthz;
-pub mod index;
-pub mod not_found;
+pub(crate) mod feed;
+pub(crate) mod healthz;
+pub(crate) mod index;
+pub(crate) mod not_found;

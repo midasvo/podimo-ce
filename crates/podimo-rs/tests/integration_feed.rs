@@ -210,11 +210,11 @@ async fn unknown_path_returns_404_text_plain() {
     handle.abort();
 }
 
-// --- middleware parity tests: ports tests/test_after_request_headers.py ---
+// --- middleware parity tests ---
 
 #[tokio::test]
 async fn get_root_has_no_cors_origin() {
-    // Python: test_get_root_has_no_cors_origin. Form endpoint is same-origin only.
+    // Form endpoint is same-origin only.
     let (addr, handle) = boot().await;
     let resp = http_client()
         .get(format!("http://{addr}/"))
@@ -228,7 +228,7 @@ async fn get_root_has_no_cors_origin() {
 
 #[tokio::test]
 async fn post_root_has_no_cors_origin() {
-    // Python: test_post_root_has_no_cors_origin. POSTs must never be cross-origin.
+    // POSTs must never be cross-origin.
     let (addr, handle) = boot().await;
     let resp = http_client()
         .post(format!("http://{addr}/"))
@@ -249,7 +249,6 @@ async fn post_root_has_no_cors_origin() {
 
 #[tokio::test]
 async fn get_feed_advertises_get_head_but_not_post() {
-    // Python: test_get_feed_has_permissive_cors_without_post.
     let (addr, handle) = boot().await;
     let resp = http_client()
         .get(format!(
@@ -282,7 +281,6 @@ async fn get_feed_advertises_get_head_but_not_post() {
 
 #[tokio::test]
 async fn two_xx_response_has_max_age_900_cache_control() {
-    // Python: test_2xx_response_has_max_age_cache_control.
     let (addr, handle) = boot().await;
     let resp = http_client()
         .get(format!("http://{addr}/"))
@@ -296,7 +294,6 @@ async fn two_xx_response_has_max_age_900_cache_control() {
 
 #[tokio::test]
 async fn four_oh_four_response_has_no_store_cache_control() {
-    // Python: test_404_response_has_no_store_cache_control.
     let (addr, handle) = boot().await;
     let resp = http_client()
         .get(format!("http://{addr}/this-route-does-not-exist"))
@@ -310,9 +307,8 @@ async fn four_oh_four_response_has_no_store_cache_control() {
 
 #[tokio::test]
 async fn bad_email_format_returns_401() {
-    // Python: test_check_auth_value_error_returns_401. PodimoClient::new rejects
-    // a malformed email (here: "not-an-email") with ClientError::InvalidCredentials,
-    // which maps to 401 with the same WWW-Authenticate header.
+    // PodimoClient::new rejects a malformed email with InvalidCredentials,
+    // which is short-circuited to 401 before any upstream request.
     let (addr, handle) = boot().await;
     let resp = http_client()
         .get(format!(
@@ -340,7 +336,6 @@ async fn bad_email_format_returns_401() {
 
 #[tokio::test]
 async fn blocked_podcast_id_returns_410() {
-    // Python: test_blocked_podcast_returns_410.
     // Write a block list file pointing at a specific podcast id, then verify the
     // feed URL is short-circuited to 410 before any upstream call.
     let blocklist = tempfile::NamedTempFile::new().unwrap();

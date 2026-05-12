@@ -1,5 +1,6 @@
-//! GraphQL client for Podimo. Mirrors `podimo/client.py`.
+//! GraphQL client for Podimo.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -10,9 +11,6 @@ use thiserror::Error;
 use crate::cache::TtlCache;
 use crate::config::Config;
 use crate::util::{generate_headers, is_correct_email, random_flyer_id, token_key};
-
-// The endpoint URL lives on `Config::graphql_url` so integration tests can
-// point at a wiremock server. Production callers leave it at the default.
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -116,10 +114,7 @@ impl PodimoClient {
             "preregisterId": self.prereg_id,
         });
         let result = post_graphql(scraper, config, &headers, query, &variables).await?;
-        let token = result
-            .get("tokenWithCredentials")
-            .and_then(|t| t.get("token"))
-            .and_then(|t| t.as_str())
+        let token = get_str(&result, &["tokenWithCredentials", "token"])
             .ok_or_else(|| ClientError::InvalidCredentials("no token in response".into()))?
             .to_string();
         self.token = Some(token.clone());
@@ -152,10 +147,7 @@ impl PodimoClient {
             "appsFlyerId": random_flyer_id(),
         });
         let result = post_graphql(scraper, config, &headers, query, &variables).await?;
-        let token = result
-            .get("tokenWithPreregisterUser")
-            .and_then(|t| t.get("token"))
-            .and_then(|t| t.as_str())
+        let token = get_str(&result, &["tokenWithPreregisterUser", "token"])
             .ok_or_else(|| ClientError::Upstream("no tokenWithPreregisterUser".into()))?
             .to_string();
         self.preauth_token = Some(token);
@@ -180,10 +172,7 @@ impl PodimoClient {
         "#;
         let variables = json!({ "locale": self.locale, "countryCode": self.region, "appsFlyerId": random_flyer_id() });
         let result = post_graphql(scraper, config, &headers, query, &variables).await?;
-        let id = result
-            .get("userOnboardingFlow")
-            .and_then(|t| t.get("id"))
-            .and_then(|t| t.as_str())
+        let id = get_str(&result, &["userOnboardingFlow", "id"])
             .ok_or_else(|| ClientError::Upstream("no userOnboardingFlow.id".into()))?
             .to_string();
         self.prereg_id = Some(id);
@@ -191,14 +180,16 @@ impl PodimoClient {
     }
 
     /// Page through `podcastEpisodes` 100 at a time. Returns the full payload
-    /// (the first page's structure with all episodes concatenated).
+    /// (the first page's structure with all episodes concatenated). Cached
+    /// as `Arc<Value>` so cache hits and the in-flight return share one
+    /// allocation — the payload can be megabytes for long-running shows.
     pub async fn get_podcasts(
         &self,
         scraper: &Client,
         config: &Config,
         podcast_id: &str,
-        podcast_cache: &TtlCache<Value>,
-    ) -> Result<Value, ClientError> {
+        podcast_cache: &TtlCache<Arc<Value>>,
+    ) -> Result<Arc<Value>, ClientError> {
         if let Some(cached) = podcast_cache.get(podcast_id).await {
             return Ok(cached);
         }
@@ -293,11 +284,20 @@ impl PodimoClient {
         }
 
         let result = full.ok_or_else(|| ClientError::Upstream("no episodes returned".into()))?;
+        let arc = Arc::new(result);
         podcast_cache
-            .insert(podcast_id.to_string(), result.clone())
+            .insert(podcast_id.to_string(), Arc::clone(&arc))
             .await;
-        Ok(result)
+        Ok(arc)
     }
+}
+
+fn get_str<'a>(v: &'a Value, path: &[&str]) -> Option<&'a str> {
+    let mut cur = v;
+    for &k in path {
+        cur = cur.get(k)?;
+    }
+    cur.as_str()
 }
 
 /// Decides which URL/client to use for the Cloudflare bypass and posts a

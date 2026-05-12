@@ -1,9 +1,11 @@
-//! Configuration: env + .env, mirrors `podimo/config.py`.
+//! Configuration: env + .env.
 
 use std::env;
 use std::sync::Arc;
 
 use serde::Deserialize;
+
+use crate::util::parse_bool_loose;
 
 pub type SharedConfig = Arc<Config>;
 
@@ -107,15 +109,10 @@ fn env_opt(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.is_empty())
 }
 
-/// Boolean coercion compatible with the Python `bool(str(v).lower() in [...])` check.
 fn env_bool(key: &str, default: bool) -> bool {
-    match env::var(key) {
-        Ok(v) => matches!(
-            v.to_ascii_lowercase().as_str(),
-            "true" | "1" | "t" | "y" | "yes"
-        ),
-        Err(_) => default,
-    }
+    env::var(key)
+        .map(|v| parse_bool_loose(&v))
+        .unwrap_or(default)
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
@@ -125,7 +122,6 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// Region codes and labels — mirrors `REGIONS` in `podimo/config.py`.
 pub const REGIONS: &[(&str, &str)] = &[
     ("nl", "Nederland"),
     ("de", "Deutschland"),

@@ -1,4 +1,4 @@
-//! Tests for `podimo::head::url_head_info`. Mirrors `tests/test_url_head_info.py`.
+//! Tests for `podimo::head::url_head_info`.
 
 use std::time::Duration;
 
@@ -14,7 +14,6 @@ async fn empty_head_cache() -> TtlCache<HeadInfo> {
 
 #[tokio::test]
 async fn missing_content_length_returns_string_zero() {
-    // Python: test_missing_content_length_returns_string_zero.
     // A HEAD response with no Content-Length must surface as the string "0" so
     // the RSS enclosure builder doesn't crash on a non-string length.
     let server = MockServer::start().await;
@@ -40,7 +39,6 @@ async fn missing_content_length_returns_string_zero() {
 
 #[tokio::test]
 async fn content_length_from_header_is_passed_through() {
-    // Python: test_content_length_from_header_is_passed_through.
     let server = MockServer::start().await;
     Mock::given(method("HEAD"))
         .and(path("/x.mp3"))

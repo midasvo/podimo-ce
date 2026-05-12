@@ -1,4 +1,4 @@
-//! GET /feed/<podcast_id>.xml. Mirrors `serve_basic_auth_feed` + `serve_feed`.
+//! GET /feed/<podcast_id>.xml.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode, Uri};
@@ -15,11 +15,11 @@ use crate::podimo::{ClientError, PodimoClient};
 use crate::state::AppState;
 use crate::util::{amp_arg, split_username_region_locale, PODCAST_ID_RE};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/feed/:podcast_id", get(serve))
 }
 
-pub fn unauthorized_response(hostname: &str) -> Response {
+pub(crate) fn unauthorized_response(hostname: &str) -> Response {
     let body = format!(
         "401 Unauthorized.\n\
 You need to login with the correct credentials for Podimo.\n\n\
@@ -43,13 +43,11 @@ async fn serve(
     uri: Uri,
     req_headers: axum::http::HeaderMap,
 ) -> Response {
-    // The route is `/feed/:podcast_id`; we strip the `.xml` suffix manually so the
-    // matcher doesn't have to treat the dot specially. Anything without `.xml` falls
-    // through to the 404 handler.
+    // The route matches anything under /feed/<segment>; we require `.xml` and
+    // strip it here so the router doesn't have to treat the dot specially.
     let Some(podcast_id) = podcast_id_with_ext.strip_suffix(".xml") else {
-        return (axum::http::StatusCode::NOT_FOUND, "404 Not found.").into_response();
+        return (StatusCode::NOT_FOUND, "404 Not found.").into_response();
     };
-    let podcast_id = podcast_id.to_string();
 
     let (username, password, region, locale) = if state.config.local_credentials {
         let region =
@@ -77,22 +75,21 @@ async fn serve(
         }
     };
 
-    if !PODCAST_ID_RE.is_match(&podcast_id) {
-        return (StatusCode::BAD_REQUEST, "Invalid podcast id format").into_response();
+    if !PODCAST_ID_RE.is_match(podcast_id) {
+        return AppError::BadRequest("Invalid podcast id format".into()).into_response();
     }
     if !is_known_region(&region) {
-        return (StatusCode::BAD_REQUEST, "Invalid region").into_response();
+        return AppError::BadRequest("Invalid region".into()).into_response();
     }
     if !is_known_locale(&locale) {
-        return (StatusCode::BAD_REQUEST, "Invalid locale").into_response();
+        return AppError::BadRequest("Invalid locale".into()).into_response();
     }
 
-    let full_url = uri.to_string();
-    if state.blocklist.contains_substring(&full_url) {
+    let url_for_blocklist = uri.path_and_query().map(|p| p.as_str()).unwrap_or("");
+    if state.blocklist.contains_substring(url_for_blocklist) {
         return AppError::Gone.into_response();
     }
 
-    // Build/cache the client + token.
     let mut client = match PodimoClient::new(&username, &password, &region, &locale) {
         Ok(c) => c,
         Err(_) => return unauthorized_response(&state.config.hostname),
@@ -101,51 +98,34 @@ async fn serve(
         client.token = Some(token);
     } else {
         match client.login(&state.scraper, &state.config).await {
-            Ok(token) => {
-                state.caches.tokens.insert(client.key.clone(), token).await;
-            }
+            Ok(token) => state.caches.tokens.insert(client.key.clone(), token).await,
             Err(ClientError::InvalidCredentials(_)) => {
-                return unauthorized_response(&state.config.hostname)
+                return unauthorized_response(&state.config.hostname);
             }
             Err(err) => {
                 tracing::error!(target: "podimo", "upstream auth failure: {err}");
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Upstream temporarily unavailable, please retry",
-                )
-                    .into_response();
+                return AppError::UpstreamUnavailable(err.to_string()).into_response();
             }
         }
     }
 
-    // Fetch the podcast (paginated, cached).
     let payload = match client
         .get_podcasts(
             &state.scraper,
             &state.config,
-            &podcast_id,
+            podcast_id,
             &state.caches.podcasts,
         )
         .await
     {
         Ok(v) => v,
-        Err(err) => {
-            if err.is_not_found() {
-                return AppError::NotFound.into_response();
-            }
-            tracing::error!(target: "podimo", "fetch podcasts error: {err}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Something went wrong while fetching the podcasts",
-            )
-                .into_response();
-        }
+        Err(err) if err.is_not_found() => return AppError::NotFound.into_response(),
+        Err(err) => return AppError::Internal(format!("fetch podcasts: {err}")).into_response(),
     };
 
-    // Render RSS.
-    let rss = match crate::podimo::rss::podcasts_to_rss(
+    match crate::podimo::rss::podcasts_to_rss(
         &payload,
-        &podcast_id,
+        podcast_id,
         &locale,
         state.config.public_feeds,
         &state.scraper,
@@ -153,18 +133,9 @@ async fn serve(
     )
     .await
     {
-        Ok(s) => s,
-        Err(err) => {
-            tracing::error!(target: "podimo", "rss render failed: {err}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Something went wrong while fetching the podcasts",
-            )
-                .into_response();
-        }
-    };
-
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/xml")], rss).into_response()
+        Ok(rss) => (StatusCode::OK, [(header::CONTENT_TYPE, "text/xml")], rss).into_response(),
+        Err(err) => AppError::Internal(format!("rss render: {err}")).into_response(),
+    }
 }
 
 /// Parses an HTTP Basic header. Returns `(username_field, password)`.

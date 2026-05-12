@@ -1,5 +1,5 @@
-//! Tracing setup. Default format matches the Python service's
-//! `LEVEL | TIMESTAMP | MESSAGE`. Set `PODIMO_LOG_JSON=true` to switch to JSON.
+//! Tracing setup. Default line format is `LEVEL | YYYY-MM-DDThh:mm:ssZ | message`.
+//! Set `PODIMO_LOG_JSON=true` to switch to structured JSON.
 
 use std::env;
 
@@ -7,11 +7,12 @@ use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::EnvFilter;
 
+use crate::util::parse_bool_loose;
+
 struct PodimoTimer;
 
 impl FormatTime for PodimoTimer {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
-        // Match Python's `%Y-%m-%dT%H:%M:%SZ`.
         write!(w, "{}", chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"))
     }
 }
@@ -23,12 +24,7 @@ pub fn init(debug: bool) {
 
     let json = env::var("PODIMO_LOG_JSON")
         .ok()
-        .map(|v| {
-            matches!(
-                v.to_ascii_lowercase().as_str(),
-                "true" | "1" | "t" | "y" | "yes"
-            )
-        })
+        .map(|v| parse_bool_loose(&v))
         .unwrap_or(false);
 
     let builder = tracing_subscriber::fmt()

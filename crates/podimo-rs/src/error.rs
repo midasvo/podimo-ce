@@ -1,16 +1,15 @@
 //! Application error types and `IntoResponse` implementations.
+//!
+//! Note: 401 is handled directly in `handlers::feed::unauthorized_response`
+//! because the response body and `WWW-Authenticate` realm depend on
+//! `AppState`'s hostname, which isn't reachable from `IntoResponse`.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use thiserror::Error;
 
-/// Top-level application error.
 #[derive(Debug, Error)]
-pub enum AppError {
-    /// Bad credentials (mirrors Python's `ValueError` in the auth path → 401).
-    #[error("invalid credentials")]
-    Unauthorized,
-
+pub(crate) enum AppError {
     /// Upstream transiently unavailable (network failure, Cloudflare block, GraphQL down) → 503.
     #[error("upstream unavailable: {0}")]
     UpstreamUnavailable(String),
@@ -35,11 +34,6 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            AppError::Unauthorized => {
-                // Called from contexts without AppState (no live hostname); use the
-                // hostname-less variant of the example body.
-                crate::handlers::feed::unauthorized_response("localhost:12104")
-            }
             AppError::UpstreamUnavailable(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Upstream temporarily unavailable, please retry",
@@ -61,11 +55,5 @@ impl IntoResponse for AppError {
                     .into_response()
             }
         }
-    }
-}
-
-impl From<anyhow::Error> for AppError {
-    fn from(err: anyhow::Error) -> Self {
-        AppError::Internal(err.to_string())
     }
 }

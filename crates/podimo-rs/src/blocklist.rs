@@ -7,10 +7,10 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Default, Clone)]
-pub struct BlockList(HashSet<String>);
+pub(crate) struct BlockList(HashSet<String>);
 
 impl BlockList {
-    pub fn load<P: AsRef<Path>>(path: P) -> Self {
+    pub(crate) fn load<P: AsRef<Path>>(path: P) -> Self {
         let path = path.as_ref();
         let Ok(content) = fs::read_to_string(path) else {
             return Self::default();
@@ -29,13 +29,8 @@ impl BlockList {
         Self(entries)
     }
 
-    pub fn contains_substring(&self, url: &str) -> bool {
+    pub(crate) fn contains_substring(&self, url: &str) -> bool {
         self.0.iter().any(|token| url.contains(token))
-    }
-
-    #[cfg(test)]
-    pub fn from_tokens<I: IntoIterator<Item = String>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
     }
 }
 
@@ -45,11 +40,8 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    // Mirrors tests/test_blocklist.py from the Python side.
-
     #[test]
     fn missing_path_returns_empty_set() {
-        // Python: test_missing_path_returns_empty_set.
         let bl = BlockList::load("/does/not/exist");
         assert!(!bl.contains_substring("anything"));
         assert!(bl.0.is_empty());
@@ -57,7 +49,6 @@ mod tests {
 
     #[test]
     fn empty_file_returns_empty_set() {
-        // Python: test_empty_file_returns_empty_set.
         let f = NamedTempFile::new().unwrap();
         let bl = BlockList::load(f.path());
         assert!(bl.0.is_empty());
@@ -65,7 +56,6 @@ mod tests {
 
     #[test]
     fn parses_ids_strips_comments_blank_lines_and_indented_comments() {
-        // Python: test_parses_ids_strips_comments_and_blank_lines.
         let mut f = NamedTempFile::new().unwrap();
         write!(
             f,
@@ -91,7 +81,6 @@ mod tests {
 
     #[test]
     fn only_first_whitespace_token_is_kept() {
-        // Python: test_only_first_whitespace_token_is_kept.
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "ABCDE description goes here").unwrap();
         let bl = BlockList::load(f.path());

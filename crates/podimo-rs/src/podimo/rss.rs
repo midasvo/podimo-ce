@@ -1,9 +1,8 @@
-//! RSS rendering. Mirrors `podcastsToRss` + `addFeedEntry` + `extract_audio_url`.
+//! RSS 2.0 rendering with iTunes extensions.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
-use futures::stream::{self, StreamExt};
+use futures::future::join_all;
 use reqwest::Client;
 use rss::extension::itunes::{
     ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder, ITunesOwnerBuilder,
@@ -16,8 +15,8 @@ use crate::podimo::head::url_head_info;
 use crate::util::jpg_fragment;
 
 const ITUNES_NS: &str = "http://www.itunes.com/dtds/podcast-1.0.dtd";
+const CONCURRENT_HEAD_PROBES: usize = 5;
 
-/// Render the Podimo payload as RSS 2.0 with iTunes extensions.
 pub async fn podcasts_to_rss(
     payload: &Value,
     podcast_id: &str,
@@ -26,72 +25,59 @@ pub async fn podcasts_to_rss(
     scraper: &Client,
     head_cache: &TtlCache<HeadInfo>,
 ) -> anyhow::Result<String> {
-    let podcast = payload.get("podcast").cloned().unwrap_or(Value::Null);
-    let episodes = payload
+    let podcast = payload.get("podcast");
+    let episodes: &[Value] = payload
         .get("episodes")
         .and_then(|e| e.as_array())
-        .cloned()
-        .unwrap_or_default();
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let last_episode = episodes.first();
 
-    let last_episode = episodes.first().cloned().unwrap_or(Value::Null);
+    let title = first_non_null_string(&[
+        podcast.and_then(|p| p.get("title")),
+        last_episode.and_then(|e| e.get("podcastName")),
+    ])
+    .unwrap_or_else(|| "Podimo".to_string());
 
-    let title = first_non_null_string(&[podcast.get("title"), last_episode.get("podcastName")])
-        .unwrap_or_else(|| "Podimo".to_string());
-
-    let description =
-        first_non_null_string(&[podcast.get("description")]).unwrap_or_else(|| title.clone());
+    let description = first_non_null_string(&[podcast.and_then(|p| p.get("description"))])
+        .unwrap_or_else(|| title.clone());
 
     let image = first_non_null_string(&[
-        podcast.get("images").and_then(|i| i.get("coverImageUrl")),
-        last_episode.get("imageUrl"),
+        podcast
+            .and_then(|p| p.get("images"))
+            .and_then(|i| i.get("coverImageUrl")),
+        last_episode.and_then(|e| e.get("imageUrl")),
     ])
     .map(|s| jpg_fragment(&s));
 
-    let language =
-        first_non_null_string(&[podcast.get("language")]).unwrap_or_else(|| locale.to_string());
+    let language = first_non_null_string(&[podcast.and_then(|p| p.get("language"))])
+        .unwrap_or_else(|| locale.to_string());
 
-    let author = first_non_null_string(&[podcast.get("authorName"), last_episode.get("artist")])
-        .unwrap_or_default();
+    let author = first_non_null_string(&[
+        podcast.and_then(|p| p.get("authorName")),
+        last_episode.and_then(|e| e.get("artist")),
+    ])
+    .unwrap_or_default();
 
     let link = format!("https://podimo.com/shows/{podcast_id}");
 
-    let mut items_by_idx: Vec<(usize, rss::Item)> = Vec::with_capacity(episodes.len());
-    let ids: Vec<String> = episodes
-        .iter()
-        .map(|e| {
-            e.get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?")
-                .to_string()
-        })
-        .collect();
-    let locale_owned = locale.to_string();
-
-    // Chunks of 5 concurrent HEAD probes match the Python flow exactly.
-    let mut stream = stream::iter(episodes.into_iter().enumerate())
-        .map(|(idx, episode)| {
-            let scraper = scraper.clone();
-            let head_cache = head_cache.clone();
-            let locale = locale_owned.clone();
-            async move {
-                let item = build_item(&scraper, &head_cache, &episode, &locale).await;
-                (idx, item)
-            }
-        })
-        .buffer_unordered(5);
-
-    while let Some((idx, item)) = stream.next().await {
-        match item {
-            Ok(Some(it)) => items_by_idx.push((idx, it)),
-            Ok(None) => {}
-            Err(err) => {
-                let id = ids.get(idx).map(String::as_str).unwrap_or("?");
-                tracing::warn!(target: "podimo", "failed to add feed entry for episode {id}: {err}");
+    // Up to CONCURRENT_HEAD_PROBES probes in flight per batch; ordering preserved.
+    let mut items: Vec<rss::Item> = Vec::with_capacity(episodes.len());
+    for chunk in episodes.chunks(CONCURRENT_HEAD_PROBES) {
+        let batch = join_all(
+            chunk
+                .iter()
+                .map(|ep| build_item(scraper, head_cache, ep, locale)),
+        )
+        .await;
+        for res in batch {
+            match res {
+                Ok(Some(it)) => items.push(it),
+                Ok(None) => {}
+                Err(err) => tracing::warn!(target: "podimo", "feed entry skipped: {err}"),
             }
         }
     }
-    items_by_idx.sort_by_key(|(idx, _)| *idx);
-    let items: Vec<rss::Item> = items_by_idx.into_iter().map(|(_, it)| it).collect();
 
     let itunes_owner = ITunesOwnerBuilder::default()
         .name(Some(author.clone()))
@@ -138,7 +124,7 @@ async fn build_item(
     episode: &Value,
     locale: &str,
 ) -> anyhow::Result<Option<rss::Item>> {
-    let id = episode.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let id = episode.get("id").and_then(|v| v.as_str()).unwrap_or("?");
     let title = episode
         .get("title")
         .and_then(|v| v.as_str())
@@ -160,20 +146,11 @@ async fn build_item(
         return Ok(None);
     };
 
-    let head = match tokio::time::timeout(
-        Duration::from_secs(40),
-        url_head_info(scraper, head_cache, id, &audio_url, locale),
-    )
-    .await
-    {
-        Ok(Ok(info)) => info,
-        Ok(Err(err)) => {
-            return Err(anyhow::anyhow!("HEAD probe failed: {err}"));
-        }
-        Err(_) => {
-            return Err(anyhow::anyhow!("HEAD probe timed out"));
-        }
-    };
+    // url_head_info already bounds total time via RETRIES * TIMEOUT_PER_TRY +
+    // backoff; no outer timeout needed.
+    let head = url_head_info(scraper, head_cache, id, &audio_url, locale)
+        .await
+        .map_err(|err| anyhow::anyhow!("HEAD probe failed for episode {id}: {err}"))?;
 
     let image_url = episode
         .get("imageUrl")
@@ -210,7 +187,8 @@ async fn build_item(
     Ok(Some(item))
 }
 
-/// Mirrors `extract_audio_url` in `main.py`. Returns `(Option<url>, duration_seconds)`.
+/// Returns `(Option<url>, duration_seconds)` from an episode object,
+/// rewriting HLS URLs to the equivalent MP3 stream where possible.
 fn extract_audio_url(episode: &Value) -> (Option<String>, i64) {
     let audio = episode.get("audio");
     let url = audio

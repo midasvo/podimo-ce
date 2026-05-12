@@ -1,13 +1,5 @@
-//! Pure helpers — ports of `podimo/utils.py` and `main.py` small functions.
-//!
-//! Mirrors:
-//!   - `randomHexId(length)`              → [`random_hex_id`]
-//!   - `randomFlyerId()`                  → [`random_flyer_id`]
-//!   - `token_key(username, password)`    → [`token_key`]
-//!   - `is_correct_email_address(s)`      → [`is_correct_email`]
-//!   - `generateHeaders(auth, locale)`    → [`generate_headers`]
-//!   - `split_username_region_locale(s)`  → [`split_username_region_locale`]
-//!   - `_arg(args, name)`                 → [`amp_arg`]
+//! Pure helpers: random ids, header builder, query-arg + image-URL fixups,
+//! and loose boolean parsing.
 
 use std::collections::HashMap;
 
@@ -20,12 +12,12 @@ use sha2::{Digest, Sha256};
 static EMAIL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").expect("static regex compiles"));
 
-pub static PODCAST_ID_RE: Lazy<Regex> =
+pub(crate) static PODCAST_ID_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[0-9a-fA-F\-]+$").expect("static regex compiles"));
 
 const HEX_CHARS: &[u8] = b"1234567890abcdef";
 
-pub fn random_hex_id(length: usize) -> String {
+pub(crate) fn random_hex_id(length: usize) -> String {
     let mut rng = rand::thread_rng();
     (0..length)
         .map(|_| {
@@ -39,7 +31,7 @@ pub fn random_hex_id(length: usize) -> String {
         .collect()
 }
 
-pub fn random_flyer_id() -> String {
+pub(crate) fn random_flyer_id() -> String {
     let mut rng = rand::thread_rng();
     let dist = Uniform::from(1_000_000_000_000_u64..=9_999_999_999_999_u64);
     let a = dist.sample(&mut rng);
@@ -47,7 +39,7 @@ pub fn random_flyer_id() -> String {
     format!("{a}-{b}")
 }
 
-pub fn token_key(username: &str, password: &str) -> String {
+pub(crate) fn token_key(username: &str, password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(username.as_bytes());
     hasher.update(b"~");
@@ -55,11 +47,14 @@ pub fn token_key(username: &str, password: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-pub fn is_correct_email(username: &str) -> bool {
+pub(crate) fn is_correct_email(username: &str) -> bool {
     EMAIL_RE.is_match(username)
 }
 
-pub fn generate_headers(authorization: Option<&str>, locale: &str) -> HashMap<String, String> {
+pub(crate) fn generate_headers(
+    authorization: Option<&str>,
+    locale: &str,
+) -> HashMap<String, String> {
     let mut h = HashMap::new();
     h.insert("user-os".into(), "android".into());
     h.insert(
@@ -77,7 +72,7 @@ pub fn generate_headers(authorization: Option<&str>, locale: &str) -> HashMap<St
 
 /// Splits an HTTP-Basic username overloaded with `,region,locale`.
 /// When fewer or more than three parts are present, defaults to `("nl", "nl-NL")`.
-pub fn split_username_region_locale(s: &str) -> (String, String, String) {
+pub(crate) fn split_username_region_locale(s: &str) -> (String, String, String) {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() == 3 {
         (parts[0].into(), parts[1].into(), parts[2].into())
@@ -88,7 +83,7 @@ pub fn split_username_region_locale(s: &str) -> (String, String, String) {
 
 /// Returns the query-arg value for `name`, falling back to `amp;<name>` for
 /// consumers that don't decode `&amp;` (e.g. Audiobookshelf scraping the HTML).
-pub fn amp_arg<'a, F>(get: F, name: &str) -> Option<String>
+pub(crate) fn amp_arg<'a, F>(get: F, name: &str) -> Option<String>
 where
     F: Fn(&str) -> Option<&'a str>,
 {
@@ -100,7 +95,7 @@ where
 /// Appends `#.jpg` to URLs that don't already end in `.jpg`/`.png`. Podimo image URLs
 /// end in signed query strings; feedgen / Apple require a recognized extension.
 /// Clients strip the fragment before issuing the GET, so the actual fetch is unaffected.
-pub fn jpg_fragment(url: &str) -> String {
+pub(crate) fn jpg_fragment(url: &str) -> String {
     let lower = url.to_ascii_lowercase();
     if lower.ends_with(".jpg") || lower.ends_with(".png") {
         url.to_string()
@@ -109,9 +104,8 @@ pub fn jpg_fragment(url: &str) -> String {
     }
 }
 
-/// Returns `Some(true)` for any common positive coercion ("true", "1", "t", "y", "yes")
-/// case-insensitive — matches the Python service's boolean handling.
-pub fn parse_bool_loose(s: &str) -> bool {
+/// Case-insensitive positive coercion: `"true"`, `"1"`, `"t"`, `"y"`, `"yes"`.
+pub(crate) fn parse_bool_loose(s: &str) -> bool {
     matches!(
         s.to_ascii_lowercase().as_str(),
         "true" | "1" | "t" | "y" | "yes"
@@ -134,7 +128,6 @@ mod tests {
 
     #[test]
     fn token_key_is_stable() {
-        // Same shape as the Python sha256(b"~".join([username, password])).
         let k = token_key("a@b.com", "secret");
         assert_eq!(k.len(), 64);
         assert!(k.chars().all(|c| c.is_ascii_hexdigit()));
@@ -206,7 +199,6 @@ mod tests {
 
     #[test]
     fn random_hex_id_length_and_alphabet() {
-        // Python: test_randomHexId_length_and_alphabet parametrized over [0, 1, 16, 64].
         for n in [0, 1, 16, 64] {
             let s = random_hex_id(n);
             assert_eq!(s.len(), n, "random_hex_id({n}) wrong length");
@@ -219,7 +211,6 @@ mod tests {
 
     #[test]
     fn token_key_distinct_for_different_inputs() {
-        // Python: test_token_key_distinct_for_different_inputs.
         let base = token_key("user@example.com", "hunter2");
         assert_ne!(token_key("other@example.com", "hunter2"), base);
         assert_ne!(token_key("user@example.com", "different"), base);

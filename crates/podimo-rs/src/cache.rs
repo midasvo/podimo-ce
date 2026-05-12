@@ -1,4 +1,4 @@
-//! Caches with TTL semantics matching `podimo/cache.py`.
+//! Caches with TTL semantics.
 //!
 //! Three caches:
 //!   - `tokens`   — login token by `sha256(username~password)`. Optionally persisted to disk.
@@ -9,6 +9,7 @@
 //! Each file contains `(expiry_unix_seconds, value_bytes)`. Wipe `<cache_dir>` to reset.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use moka::future::Cache;
@@ -24,13 +25,13 @@ pub struct HeadInfo {
 
 #[derive(Debug, Clone)]
 pub struct Caches {
-    pub tokens: TtlCache<String>,
-    pub podcasts: TtlCache<serde_json::Value>,
+    pub(crate) tokens: TtlCache<String>,
+    pub(crate) podcasts: TtlCache<Arc<serde_json::Value>>,
     pub head: TtlCache<HeadInfo>,
 }
 
 impl Caches {
-    pub async fn init(
+    pub(crate) async fn init(
         cache_dir: &str,
         store_tokens_on_disk: bool,
         token_ttl: u64,
@@ -142,11 +143,9 @@ where
         None
     }
 
-    /// Like [`get`] but never deletes an expired on-disk entry. Mirrors
-    /// `getCacheEntry(..., delete=False)` in `podimo/cache.py`: expired entries
-    /// return `None`, but the underlying record (in moka and on disk) is kept.
-    /// Used for the HEAD cache, where we want to preserve the historical record
-    /// even when the TTL is up.
+    /// Like [`Self::get`] but never deletes an expired on-disk entry: expired
+    /// entries return `None`, but the underlying record (in moka and on disk)
+    /// is kept. Used for the HEAD cache so the historical record survives TTL.
     pub async fn get_no_expire(&self, key: &str) -> Option<V> {
         if let Some(entry) = self.inner.get(key).await {
             return if entry.expiry > now_secs() {
@@ -232,11 +231,8 @@ where
 mod tests {
     use super::*;
 
-    // Mirrors tests/test_cache.py from the Python side.
-
     #[tokio::test]
     async fn insert_then_retrieve_before_expiry() {
-        // Python: test_insert_then_retrieve_before_expiry.
         let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_secs(60)).await;
         cache.insert("k".into(), "v".into()).await;
         assert_eq!(cache.get("k").await, Some("v".into()));
@@ -246,14 +242,12 @@ mod tests {
 
     #[tokio::test]
     async fn missing_key_returns_none() {
-        // Python: test_missing_key_returns_none.
         let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_secs(60)).await;
         assert_eq!(cache.get("missing").await, None);
     }
 
     #[tokio::test]
     async fn expired_entry_returns_none_and_is_evicted_from_memory() {
-        // Python: test_expired_entry_returns_none_and_is_deleted_by_default.
         let cache: TtlCache<String> = TtlCache::new("test", None, Duration::from_millis(50)).await;
         cache
             .insert_with_ttl("k".into(), "v".into(), Duration::from_millis(1))
@@ -269,9 +263,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_no_expire_returns_none_when_expired_but_keeps_key() {
-        // Python: test_expired_entry_with_delete_false_returns_none_but_keeps_key.
-        // getCacheEntry(..., delete=False) returns None on expiry but doesn't remove
-        // the underlying record (in-memory or on-disk).
+        // get_no_expire returns None on expiry but must not remove the
+        // underlying record (in-memory or on-disk).
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
         let cache: TtlCache<String> =

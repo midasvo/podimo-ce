@@ -12,11 +12,13 @@ use crate::templates::Templates;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub config: Arc<Config>,
+    pub(crate) config: Arc<Config>,
+    /// Public to let integration tests seed caches (e.g. pre-populate the
+    /// HEAD cache so tests stay offline).
     pub caches: Caches,
-    pub blocklist: Arc<BlockList>,
-    pub scraper: Client,
-    pub templates: Templates,
+    pub(crate) blocklist: Arc<BlockList>,
+    pub(crate) scraper: Client,
+    pub(crate) templates: Templates,
 }
 
 impl AppState {

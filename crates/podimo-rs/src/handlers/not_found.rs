@@ -1,4 +1,4 @@
-//! 404 fallback. Mirrors Quart's `@app.errorhandler(404)` body.
+//! 404 fallback.
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 
 use crate::state::AppState;
 
-pub async fn fallback(State(state): State<AppState>) -> impl IntoResponse {
+pub(crate) async fn fallback(State(state): State<AppState>) -> impl IntoResponse {
     let body = format!(
         "404 Not found.\n\n{}",
         example_block(&state.config.hostname)
@@ -18,7 +18,7 @@ pub async fn fallback(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-pub fn example_block(hostname: &str) -> String {
+pub(crate) fn example_block(hostname: &str) -> String {
     format!(
         "Example\n\
 ------------\n\

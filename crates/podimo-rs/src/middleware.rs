@@ -1,4 +1,4 @@
-//! After-request CORS + Cache-Control middleware. Mirrors `allow_cors` in `main.py`.
+//! After-request CORS + Cache-Control middleware.
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -8,7 +8,7 @@ use axum::response::Response;
 
 use crate::state::AppState;
 
-pub async fn after_request(
+pub(crate) async fn after_request(
     State(_state): State<AppState>,
     req: Request<Body>,
     next: Next,

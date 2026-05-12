@@ -1,4 +1,4 @@
-//! Form rendering + POST validation. Mirrors `index()` in `main.py`.
+//! Form rendering + POST validation.
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -13,7 +13,7 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::util::{random_hex_id, PODCAST_ID_RE};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/", get(render_form).post(handle_submit))
 }
 

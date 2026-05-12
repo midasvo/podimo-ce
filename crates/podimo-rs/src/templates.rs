@@ -7,12 +7,12 @@ use std::sync::Arc;
 use minijinja::Environment;
 
 #[derive(Clone)]
-pub struct Templates {
+pub(crate) struct Templates {
     env: Arc<Environment<'static>>,
 }
 
 impl Templates {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut env = Environment::new();
         env.add_template("base.html", include_str!("../templates/base.html"))
             .expect("base.html embedded");
@@ -26,7 +26,7 @@ impl Templates {
         Self { env: Arc::new(env) }
     }
 
-    pub fn render<S: serde::Serialize>(
+    pub(crate) fn render<S: serde::Serialize>(
         &self,
         name: &str,
         ctx: &S,

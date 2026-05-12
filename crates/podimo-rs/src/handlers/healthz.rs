@@ -5,7 +5,7 @@ use axum::Router;
 
 use crate::state::AppState;
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/healthz", get(healthz))
 }
 

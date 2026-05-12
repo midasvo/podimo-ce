@@ -1,11 +1,8 @@
 //! Structural snapshot tests for `podimo::rss::podcasts_to_rss`.
 //!
-//! Mirrors `tests/test_feed_rendering.py`. Assertions are substring-based so
-//! they don't couple to feedgen-vs-rss-crate differences in attribute ordering,
-//! whitespace, or generator metadata.
-//!
-//! The HEAD probe is pre-empted by pre-populating the head cache with a
-//! deterministic `HeadInfo`, so the test stays offline.
+//! Assertions are substring-based so they don't couple to attribute ordering,
+//! whitespace, or generator metadata. The HEAD probe is pre-empted by
+//! pre-populating the head cache, so the test stays offline.
 
 use std::time::Duration;
 
@@ -75,7 +72,6 @@ async fn stub_head_cache_for(
 
 #[tokio::test]
 async fn podcasts_to_rss_renders_expected_structure() {
-    // Python: test_podcastsToRss_renders_expected_structure.
     let head_cache = stub_head_cache_for(&["ep1", "ep2"], "12345", "audio/mpeg").await;
     let scraper = Client::new();
 
@@ -127,7 +123,6 @@ async fn podcasts_to_rss_renders_expected_structure() {
 
 #[tokio::test]
 async fn podcasts_to_rss_appends_jpg_fragment_to_extensionless_image_urls() {
-    // Python: test_podcastsToRss_appends_jpg_fragment_to_extensionless_image_urls.
     let head_cache = stub_head_cache_for(&["ep1", "ep2"], "0", "audio/mpeg").await;
     let scraper = Client::new();
 
@@ -166,7 +161,6 @@ async fn podcasts_to_rss_appends_jpg_fragment_to_extensionless_image_urls() {
 
 #[tokio::test]
 async fn podcasts_to_rss_preserves_existing_jpg_extension() {
-    // Python: test_podcastsToRss_preserves_existing_jpg_extension.
     let head_cache = stub_head_cache_for(&["ep1", "ep2"], "0", "audio/mpeg").await;
     let scraper = Client::new();
 
@@ -189,7 +183,6 @@ async fn podcasts_to_rss_preserves_existing_jpg_extension() {
 
 #[tokio::test]
 async fn podcasts_to_rss_sets_itunes_block_when_public_feeds_disabled() {
-    // Mirrors the Python `if not PUBLIC_FEEDS: fg.podcast.itunes_block(True)` line.
     let head_cache = stub_head_cache_for(&["ep1", "ep2"], "0", "audio/mpeg").await;
     let scraper = Client::new();
 

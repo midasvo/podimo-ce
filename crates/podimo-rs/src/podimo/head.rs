@@ -1,4 +1,4 @@
-//! Episode-media HEAD probe with retries + cache. Mirrors `urlHeadInfo` in `main.py`.
+//! Episode-media HEAD probe with retries + cache.
 
 use std::time::Duration;
 
@@ -16,8 +16,8 @@ pub async fn url_head_info(
     url: &str,
     locale: &str,
 ) -> Result<HeadInfo, reqwest::Error> {
-    // `getHeadEntry` in Python passes `delete=False` — we mirror that with `get_no_expire`
-    // so a stale-but-present cached entry beats a transient HEAD failure.
+    // Use get_no_expire: a stale-but-present cached entry beats a transient HEAD
+    // failure, and the historical record stays on disk for inspection.
     if let Some(cached) = cache.get_no_expire(episode_id).await {
         return Ok(cached);
     }

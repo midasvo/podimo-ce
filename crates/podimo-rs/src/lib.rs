@@ -1,16 +1,18 @@
-//! Rust port of podimo-ce. See `MIGRATION_PLAN.md` at the repo root.
+//! Podimo-to-RSS proxy library: [`app`] builds the Axum router, [`AppState`]
+//! is the shared state, and the `cache`/`config`/`podimo`/`telemetry` modules
+//! are exposed for the binary and integration tests.
 
-pub mod blocklist;
+pub(crate) mod blocklist;
 pub mod cache;
 pub mod config;
-pub mod error;
-pub mod handlers;
-pub mod middleware;
+pub(crate) mod error;
+pub(crate) mod handlers;
+pub(crate) mod middleware;
 pub mod podimo;
-pub mod state;
+pub(crate) mod state;
 pub mod telemetry;
-pub mod templates;
-pub mod util;
+pub(crate) mod templates;
+pub(crate) mod util;
 
 use axum::Router;
 

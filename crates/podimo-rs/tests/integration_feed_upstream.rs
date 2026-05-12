@@ -1,8 +1,7 @@
 //! End-to-end feed-flow tests with a mocked Podimo GraphQL upstream.
 //!
-//! Mirrors `tests/test_feed_flow.py`'s monkeypatch-based tests, but against the
-//! real HTTP server — wiremock stands in for `https://podimo.com/graphql` and
-//! the head cache is pre-populated so no episode-media HEAD probe goes out.
+//! Wiremock stands in for `https://podimo.com/graphql`; the head cache is
+//! pre-populated so no episode-media HEAD probe goes out.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -136,7 +135,6 @@ const PODCAST_ID: &str = "de9b2081-9fc5-489f-b9d3-d744ed9cab20";
 
 #[tokio::test]
 async fn happy_path_returns_rss() {
-    // Python: test_happy_path_returns_rss.
     let server = MockServer::start().await;
     install_graphql_mock(
         &server,
@@ -182,7 +180,6 @@ async fn happy_path_returns_rss() {
 
 #[tokio::test]
 async fn podcast_not_found_returns_404() {
-    // Python: test_podcast_not_found_returns_404.
     let server = MockServer::start().await;
     install_graphql_mock(
         &server,
@@ -206,7 +203,6 @@ async fn podcast_not_found_returns_404() {
 
 #[tokio::test]
 async fn other_upstream_error_returns_500() {
-    // Python: test_other_upstream_error_returns_500.
     let server = MockServer::start().await;
     install_graphql_mock(
         &server,
@@ -230,9 +226,8 @@ async fn other_upstream_error_returns_500() {
 
 #[tokio::test]
 async fn upstream_5xx_during_auth_returns_503() {
-    // Mirrors Python's test_check_auth_runtime_error_returns_503 — when the
-    // upstream returns 5xx (e.g. Cloudflare block), the handler maps that to
-    // 503 so clients distinguish it from a bad-credentials 401.
+    // When the upstream returns 5xx (e.g. Cloudflare block), the handler must
+    // map that to 503 so clients distinguish it from a bad-credentials 401.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/graphql"))
