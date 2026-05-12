@@ -128,6 +128,23 @@ Grep the codebase for `TODO(migration):` to find these in-line.
   validation surface; a contract test that boots both services and diffs RSS
   bodies (with XML canonicalization) is good for Phase 4 but not yet wired up.
 
+## Container publishing
+
+The Rust image publishes as a *parallel* image to the Python one, not a
+replacement:
+
+| Service | Image                              | Workflow                                  |
+| ------- | ---------------------------------- | ----------------------------------------- |
+| Python  | `ghcr.io/midasvo/podimo-ce`        | `.github/workflows/docker-publish.yml`    |
+| Rust    | `ghcr.io/midasvo/podimo-rs`        | `.github/workflows/docker-publish-rs.yml` |
+
+The Rust workflow is gated on `paths: ['rust/**']`, so Python-only changes
+don't fire it, and only triggers from `main` / `v*.*.*` tags / manual dispatch.
+Nothing publishes from `rust-rewrite` automatically; the PR can merge into
+`main` without surprising consumers of the existing Python image.
+
+Binary in the image is `/usr/local/bin/podimo-rs`. Locally: `cargo run --bin podimo-rs`.
+
 ## Verification log
 
 Run from `rust/`:

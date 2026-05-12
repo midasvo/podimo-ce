@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Rust port of podimo-ce: Podimo-to-RSS proxy"
 
 [[bin]]
-name = "podimo"
+name = "podimo-rs"
 path = "src/main.rs"
 
 [lib]
