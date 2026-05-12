@@ -3,3 +3,11 @@ venv
 cache
 .env
 .block-list
+
+# Rust build artefacts
+rust/target/
+**/*.rs.bk
+
+# Python tool caches
+.pytest_cache/
+.ruff_cache/
