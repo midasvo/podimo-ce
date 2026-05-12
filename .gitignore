@@ -11,3 +11,6 @@ rust/target/
 # Python tool caches
 .pytest_cache/
 .ruff_cache/
+
+# Claude Code agent state — local-only working trees, never tracked.
+.claude/
