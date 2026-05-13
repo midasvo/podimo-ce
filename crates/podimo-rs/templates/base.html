@@ -1,125 +1,595 @@
-<html>
+<!doctype html>
+<html lang="en">
 
 <head>
-  <title>Podimo-to-RSS converter</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Podimo-to-RSS</title>
   <style>
-    html {
-      max-width: 80ch;
-      /* larger spacing on larger screens, very small spacing on tiny screens */
-      padding: calc(1vmin + .5rem);
-      /* shorthand for margin-left/margin-right */
-      margin-inline: auto;
-      /* use system font stack: https://developer.mozilla.org/en-US/docs/Web/CSS/font-family */
-      font-family: system-ui;
-      background-color: #eeeeee;
-    }
-
-    /* increase line-height for everything except headings */
-    body :not(:is(h1, h2, h3, h4, h5, h6)) {
-      line-height: 1.75;
-    }
-
-    form {
-      padding-top: 1rem;
-    }
-
-    *:not(:is(h1, h2, h3, h4, h5, h6)) {
-      /* fluid sizing: https://frontaid.io/blog/fluid-typography-2d-css-locks-clamp/ */
-      font-size: clamp(1rem, 0.909rem + 0.45vmin, 1.25rem);
-    }
-
-    select,
-    button,
-    input {
-      border: 0;
-      width: 100%;
-      padding: 0.5rem;
-      margin-bottom: 1rem;
-      font-size: 1rem;
-      background-color: #fff;
-      color: #000;
-    }
-
-    input[type=submit] {
-      margin: 1rem 0 2rem 0;
-    }
-
-    form:invalid input[type=submit] {
-      /* pointer-events: none; */
-      opacity: 0.3;
-      cursor: not-allowed;
-    }
-
-    input:invalid {
-      background: url("data:image/svg+xml,%3Csvg%20width%3D%221.0625em%22%20id%3D%22triangle%22%20height%3D%221em%22%20viewBox%3D%220%200%2017%2016%22%20fill%3D%22black%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill-rule%3D%22evenodd%22%20d%3D%22M8.982%201.566a1.13%201.13%200%200%200-1.96%200L.165%2013.233c-.457.778.091%201.767.98%201.767h13.713c.889%200%201.438-.99.98-1.767L8.982%201.566zM8%205a.905.905%200%200%200-.9.995l.35%203.507a.552.552%200%200%200%201.1%200l.35-3.507A.905.905%200%200%200%208%205zm.002%206a1%201%200%201%200%200%202%201%201%200%200%200%200-2z%22%20%2F%3E%3C%2Fsvg%3E%0A") no-repeat 95% 50% #ffffff;
-      background-size: 1.5rem;
-    }
-
-    details {
-      padding: 1rem 0;
-      cursor: pointer;
-    }
-
-    details>summary {
-      padding: 1rem;
-      background-color: #cccccc;
-    }
-
-    footer {
-      margin: 1rem 0 2rem 0;
-      background-color: #cccccc;
-      padding: 1rem;
-    }
-
-    details>ol {
-      margin: 0;
-      background-color: #e6e6e6;
-      padding: 1rem 2rem 1rem 3rem;
-    }
-
-    #triangle {
-      display: none;
+    /* ---------- design tokens ---------- */
+    :root {
+      --paper: #f4ecdc;
+      --paper-2: #ece2cc;
+      --rule: #1a181522;
+      --ink: #1a1815;
+      --ink-soft: #4a443a;
+      --ink-mute: #6a6354;
+      --accent: #c63d20;
+      --accent-ink: #fff7ed;
+      --field-bg: #fbf5e7;
+      --field-bg-focus: #fff8e8;
+      --shadow: 0 1px 0 #1a181508, 0 8px 24px -16px #1a181530;
+      --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.09  0 0 0 0 0.08  0 0 0 0.08 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
     }
 
     @media (prefers-color-scheme: dark) {
-      html {
-        color: #fff;
-        background-color: #000;
+      :root {
+        --paper: #10131a;
+        --paper-2: #161a22;
+        --rule: #e8e0d220;
+        --ink: #ebe2cf;
+        --ink-soft: #b8af9d;
+        --ink-mute: #8a8273;
+        --accent: #f0a04b;
+        --accent-ink: #1a120a;
+        --field-bg: #1a1f2a;
+        --field-bg-focus: #20283a;
+        --shadow: 0 1px 0 #00000040, 0 8px 28px -16px #00000080;
+        --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9  0 0 0 0 0.85  0 0 0 0 0.75  0 0 0 0.05 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
       }
+    }
 
-      details>summary {
-        background-color: #262626;
-      }
+    /* ---------- base ---------- */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
 
-      details>ol {
-        background-color: #404040;
-      }
+    html {
+      background: var(--paper);
+      color: var(--ink);
+    }
 
-      footer {
-        background-color: #262626;
-      }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: clamp(1rem, 0.92rem + 0.35vmin, 1.125rem);
+      line-height: 1.65;
+      background:
+        var(--grain),
+        radial-gradient(1200px 600px at 110% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+        var(--paper);
+      background-attachment: fixed;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
 
-      a {
-        color: #eee;
-      }
+    .page {
+      max-width: 64ch;
+      margin-inline: auto;
+      padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1.25rem, 4vw, 2rem) 3rem;
+    }
 
-      select,
-      button,
-      input {
-        background-color: #262626;
-        color: #fff;
-      }
+    /* ---------- masthead ---------- */
+    .masthead {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--rule);
+      margin-bottom: 1.75rem;
+    }
 
-      input:invalid {
-        background: url("data:image/svg+xml,%3Csvg%20width%3D%221.0625em%22%20id%3D%22triangle%22%20height%3D%221em%22%20viewBox%3D%220%200%2017%2016%22%20fill%3D%22white%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill-rule%3D%22evenodd%22%20d%3D%22M8.982%201.566a1.13%201.13%200%200%200-1.96%200L.165%2013.233c-.457.778.091%201.767.98%201.767h13.713c.889%200%201.438-.99.98-1.767L8.982%201.566zM8%205a.905.905%200%200%200-.9.995l.35%203.507a.552.552%200%200%200%201.1%200l.35-3.507A.905.905%200%200%200%208%205zm.002%206a1%201%200%201%200%200%202%201%201%200%200%200%200-2z%22%20%2F%3E%3C%2Fsvg%3E%0A") no-repeat 95% 50% #404040;
-        background-size: 1.5rem;
+    .masthead .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.78rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+    }
+
+    .masthead .brand .dot {
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
+      display: inline-block;
+    }
+
+    .masthead .issue {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+    }
+
+    /* ---------- headline ---------- */
+    h1.headline {
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "URW Palladio L", Charter, Georgia, "Times New Roman", serif;
+      font-weight: 600;
+      font-style: normal;
+      font-size: clamp(2.4rem, 1.6rem + 4vw, 4rem);
+      line-height: 0.98;
+      letter-spacing: -0.02em;
+      margin: 0.25rem 0 0.5rem;
+      color: var(--ink);
+    }
+
+    h1.headline em {
+      font-style: italic;
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .deck {
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, serif;
+      font-style: italic;
+      font-size: clamp(1.05rem, 1rem + 0.3vmin, 1.2rem);
+      line-height: 1.5;
+      color: var(--ink-soft);
+      max-width: 48ch;
+      margin: 0.25rem 0 2rem;
+    }
+
+    .deck::before {
+      content: "";
+      display: block;
+      width: 2.5rem;
+      height: 1px;
+      background: var(--accent);
+      margin: 0.1rem 0 0.9rem;
+    }
+
+    /* ---------- disclosure (help block) ---------- */
+    details.help {
+      margin: 0 0 2rem;
+      border-top: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+      background: transparent;
+    }
+
+    details.help > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 0.95rem 0;
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      transition: color 120ms ease;
+    }
+
+    details.help > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.help > summary:hover {
+      color: var(--ink);
+    }
+
+    details.help > summary .glyph {
+      width: 1.25rem;
+      height: 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--rule);
+      border-radius: 999px;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: 0.95rem;
+      line-height: 1;
+      color: var(--ink-soft);
+      transition: transform 200ms ease, background 200ms ease, color 200ms ease, border-color 200ms ease;
+    }
+
+    details.help[open] > summary .glyph {
+      transform: rotate(45deg);
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+    }
+
+    details.help[open] > summary {
+      color: var(--ink);
+    }
+
+    .help-body {
+      padding: 0.25rem 0 1.5rem;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, serif;
+      color: var(--ink-soft);
+    }
+
+    .help-body p.lede {
+      margin: 0 0 1rem;
+      font-style: italic;
+      color: var(--ink);
+    }
+
+    ol.steps {
+      list-style: none;
+      counter-reset: step;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.9rem;
+    }
+
+    ol.steps > li {
+      counter-increment: step;
+      display: grid;
+      grid-template-columns: 2.5rem 1fr;
+      gap: 0.85rem;
+      align-items: baseline;
+    }
+
+    ol.steps > li::before {
+      content: counter(step, decimal-leading-zero);
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-feature-settings: "tnum" 1;
+      font-size: 0.85rem;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      border-right: 1px solid var(--rule);
+      padding-right: 0.75rem;
+      text-align: right;
+      align-self: start;
+      line-height: 1.7;
+    }
+
+    ol.steps em {
+      font-style: italic;
+      color: var(--ink);
+    }
+
+    /* ---------- form ---------- */
+    .form-card {
+      display: grid;
+      gap: 1.5rem;
+      padding: 0;
+    }
+
+    .field {
+      display: grid;
+      gap: 0.4rem;
+    }
+
+    .field label {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+    }
+
+    .field .hint {
+      font-size: 0.85rem;
+      color: var(--ink-mute);
+      line-height: 1.5;
+    }
+
+    .field .hint code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      color: var(--ink-soft);
+      background: color-mix(in srgb, var(--ink) 6%, transparent);
+      padding: 0.05rem 0.35rem;
+      border-radius: 3px;
+      word-break: break-all;
+    }
+
+    input,
+    select {
+      width: 100%;
+      font: inherit;
+      font-size: 1rem;
+      color: var(--ink);
+      background: var(--field-bg);
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      padding: 0.7rem 0.85rem;
+      box-shadow: inset 0 1px 0 #ffffff10;
+      transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    select {
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%),
+        linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+      background-position:
+        calc(100% - 1.1rem) 55%,
+        calc(100% - 0.7rem) 55%;
+      background-size: 0.4rem 0.4rem, 0.4rem 0.4rem;
+      background-repeat: no-repeat;
+      padding-right: 2.25rem;
+    }
+
+    input::placeholder {
+      color: color-mix(in srgb, var(--ink-mute) 80%, transparent);
+    }
+
+    input:focus,
+    select:focus {
+      outline: none;
+      background: var(--field-bg-focus);
+      border-color: var(--accent);
+      box-shadow:
+        inset 0 1px 0 #ffffff10,
+        0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+
+    input:user-invalid {
+      border-color: color-mix(in srgb, var(--accent) 70%, var(--ink-mute));
+    }
+
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+
+    @media (max-width: 480px) {
+      .row-2 {
+        grid-template-columns: 1fr;
       }
+    }
+
+    /* ---------- submit ---------- */
+    button.primary,
+    input.primary[type="submit"] {
+      width: 100%;
+      font: inherit;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      font-size: 1.02rem;
+      color: var(--accent-ink);
+      background: var(--ink);
+      border: 1px solid var(--ink);
+      border-radius: 2px;
+      padding: 0.95rem 1.25rem;
+      cursor: pointer;
+      transition: transform 80ms ease, background 140ms ease, box-shadow 140ms ease;
+      box-shadow: var(--shadow);
+    }
+
+    button.primary:hover,
+    input.primary[type="submit"]:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    button.primary:active,
+    input.primary[type="submit"]:active {
+      transform: translateY(1px);
+    }
+
+    button.primary:focus-visible,
+    input.primary[type="submit"]:focus-visible {
+      outline: none;
+      box-shadow:
+        var(--shadow),
+        0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+    }
+
+    /* ---------- error ---------- */
+    .error {
+      display: flex;
+      gap: 0.85rem;
+      align-items: flex-start;
+      padding: 0.95rem 1rem;
+      margin: 0 0 1.5rem;
+      background: color-mix(in srgb, var(--accent) 12%, var(--paper));
+      border-left: 3px solid var(--accent);
+      color: var(--ink);
+      border-radius: 2px;
+    }
+
+    .error .tag {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      padding-top: 0.15rem;
+      white-space: nowrap;
+    }
+
+    .error .msg {
+      font-family: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, serif;
+      font-style: italic;
+      line-height: 1.5;
+    }
+
+    /* ---------- result page bits ---------- */
+    .result {
+      display: grid;
+      gap: 1.25rem;
+    }
+
+    .result p.kicker {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+      margin: 0;
+    }
+
+    .result h2 {
+      font-family: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, serif;
+      font-weight: 600;
+      font-size: clamp(1.7rem, 1.3rem + 1.5vw, 2.2rem);
+      line-height: 1.1;
+      letter-spacing: -0.01em;
+      margin: 0;
+    }
+
+    .result h2 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+
+    .url-card {
+      background: var(--paper-2);
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      padding: 1.1rem 1.15rem;
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .url-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      background: repeating-linear-gradient(
+        to bottom,
+        var(--accent) 0 6px,
+        transparent 6px 12px
+      );
+    }
+
+    .url-card .label {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+      margin: 0 0 0.4rem 0.55rem;
+    }
+
+    .url-card .url {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.96rem;
+      line-height: 1.5;
+      word-break: break-all;
+      color: var(--ink);
+      margin: 0 0 0 0.55rem;
+      user-select: all;
+    }
+
+    .copy-row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .copy-row .note {
+      font-family: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, serif;
+      font-style: italic;
+      color: var(--ink-soft);
+      font-size: 0.95rem;
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+      text-decoration: none;
+      margin-top: 0.75rem;
+      border-bottom: 1px dashed var(--rule);
+      padding-bottom: 0.15rem;
+      width: fit-content;
+    }
+
+    .back-link:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* ---------- colophon / footer ---------- */
+    footer.colophon {
+      margin: 3rem 0 0;
+      padding: 1.25rem 0 0;
+      border-top: 1px solid var(--rule);
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.74rem;
+      letter-spacing: 0.08em;
+      color: var(--ink-mute);
+      line-height: 1.7;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem 1.25rem;
+      justify-content: space-between;
+    }
+
+    footer.colophon a {
+      color: var(--ink-soft);
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 0.1rem;
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+
+    footer.colophon a:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* ---------- global link style for body copy ---------- */
+    a {
+      color: var(--ink);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.2em;
+    }
+
+    a:hover {
+      color: var(--accent);
+    }
+
+    /* respect motion preferences */
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        transition: none !important;
+      }
+    }
   </style>
 </head>
 
 <body>
-  {% block body %}
-  {% endblock %}
+  <main class="page">
+    <header class="masthead">
+      <span class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Podimo&nbsp;&middot;&nbsp;RSS Bureau</span>
+      </span>
+      <span class="issue">No.&nbsp;12104</span>
+    </header>
+
+    {% block body %}
+    {% endblock %}
+
+    <footer class="colophon">
+      <span>Licensed&nbsp;EUPL&#8209;1.2</span>
+      <span>
+        <a href="https://github.com/midasvo/podimo-rs">source &middot; github.com/midasvo/podimo-rs</a>
+      </span>
+    </footer>
+  </main>
 </body>
 
 </html>

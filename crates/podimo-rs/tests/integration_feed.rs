@@ -144,6 +144,25 @@ async fn invalid_locale_returns_400() {
 }
 
 #[tokio::test]
+async fn invalid_limit_returns_400() {
+    let (addr, handle) = boot().await;
+    for bad in ["abc", "-1", "0", "1.5"] {
+        let resp = http_client()
+            .get(format!(
+                "http://{addr}/feed/de9b2081-9fc5-489f-b9d3-d744ed9cab20.xml?limit={bad}"
+            ))
+            .header("Authorization", basic_auth_header("a@b.com,nl,nl-NL", "pw"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "limit={bad} should 400");
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("Invalid limit"), "limit={bad}, body={body}");
+    }
+    handle.abort();
+}
+
+#[tokio::test]
 async fn feed_get_response_has_cors_headers() {
     let (addr, handle) = boot().await;
     // Unauthenticated -> 401 but CORS should still be emitted on /feed/* GETs.

@@ -85,6 +85,18 @@ async fn serve(
         return AppError::BadRequest("Invalid locale".into()).into_response();
     }
 
+    let limit = match amp_arg(|k| params.get(k).map(String::as_str), "limit") {
+        Some(s) if s.is_empty() => None,
+        Some(s) => match s.parse::<usize>() {
+            Ok(n) if n >= 1 => Some(n),
+            _ => {
+                return AppError::BadRequest("Invalid limit (must be a positive integer)".into())
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
     let url_for_blocklist = uri.path_and_query().map(|p| p.as_str()).unwrap_or("");
     if state.blocklist.contains_substring(url_for_blocklist) {
         return AppError::Gone.into_response();
@@ -128,6 +140,7 @@ async fn serve(
         podcast_id,
         &locale,
         state.config.public_feeds,
+        limit,
         &state.scraper,
         &state.caches.head,
     )

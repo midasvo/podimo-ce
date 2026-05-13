@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{is_known_locale, is_known_region, LOCALES, REGIONS};
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::util::{random_hex_id, PODCAST_ID_RE};
+use crate::util::{extract_podcast_id, random_hex_id, PODCAST_ID_RE};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/", get(render_form).post(handle_submit))
@@ -70,10 +70,13 @@ async fn handle_submit(State(state): State<AppState>, Form(form): Form<SubmitFor
             error.push_str("Password is required");
         }
     }
-    let podcast_id = form.podcast_id.as_deref().unwrap_or("");
-    if podcast_id.is_empty() {
+    // Users may paste a full Podimo URL (e.g. https://open.podimo.com/podcast/<uuid>);
+    // extract_podcast_id pulls the UUID out and leaves a bare id alone.
+    let raw_podcast_id = form.podcast_id.as_deref().unwrap_or("");
+    let podcast_id = extract_podcast_id(raw_podcast_id).unwrap_or("");
+    if raw_podcast_id.trim().is_empty() {
         error.push_str("Podcast ID is required");
-    } else if !PODCAST_ID_RE.is_match(podcast_id) {
+    } else if podcast_id.is_empty() || !PODCAST_ID_RE.is_match(podcast_id) {
         error.push_str("Podcast ID is not valid");
     }
 

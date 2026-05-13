@@ -80,6 +80,7 @@ async fn podcasts_to_rss_renders_expected_structure() {
         "podcast-uuid",
         "nl-NL",
         false,
+        None,
         &scraper,
         &head_cache,
     )
@@ -137,6 +138,7 @@ async fn podcasts_to_rss_appends_jpg_fragment_to_extensionless_image_urls() {
         "podcast-uuid",
         "nl-NL",
         false,
+        None,
         &scraper,
         &head_cache,
     )
@@ -169,6 +171,7 @@ async fn podcasts_to_rss_preserves_existing_jpg_extension() {
         "podcast-uuid",
         "nl-NL",
         false,
+        None,
         &scraper,
         &head_cache,
     )
@@ -182,6 +185,49 @@ async fn podcasts_to_rss_preserves_existing_jpg_extension() {
 }
 
 #[tokio::test]
+async fn podcasts_to_rss_limits_to_n_newest_episodes() {
+    let head_cache = stub_head_cache_for(&["ep1", "ep2"], "0", "audio/mpeg").await;
+    let scraper = Client::new();
+
+    let rss = podcasts_to_rss(
+        &fixed_payload(),
+        "podcast-uuid",
+        "nl-NL",
+        false,
+        Some(1),
+        &scraper,
+        &head_cache,
+    )
+    .await
+    .expect("render");
+
+    // Episodes arrive PUBLISHED_DESCENDING; limit=1 keeps the head of the slice.
+    assert_eq!(rss.matches("<item>").count(), 1, "want 1 <item>: {rss}");
+    assert!(rss.contains("<title>Episode 1</title>"));
+    assert!(!rss.contains("<title>Episode 2</title>"));
+}
+
+#[tokio::test]
+async fn podcasts_to_rss_limit_larger_than_episode_count_is_noop() {
+    let head_cache = stub_head_cache_for(&["ep1", "ep2"], "0", "audio/mpeg").await;
+    let scraper = Client::new();
+
+    let rss = podcasts_to_rss(
+        &fixed_payload(),
+        "podcast-uuid",
+        "nl-NL",
+        false,
+        Some(999),
+        &scraper,
+        &head_cache,
+    )
+    .await
+    .expect("render");
+
+    assert_eq!(rss.matches("<item>").count(), 2);
+}
+
+#[tokio::test]
 async fn podcasts_to_rss_sets_itunes_block_when_public_feeds_disabled() {
     let head_cache = stub_head_cache_for(&["ep1", "ep2"], "0", "audio/mpeg").await;
     let scraper = Client::new();
@@ -191,6 +237,7 @@ async fn podcasts_to_rss_sets_itunes_block_when_public_feeds_disabled() {
         "podcast-uuid",
         "nl-NL",
         /*public_feeds=*/ false,
+        None,
         &scraper,
         &head_cache,
     )
@@ -206,6 +253,7 @@ async fn podcasts_to_rss_sets_itunes_block_when_public_feeds_disabled() {
         "podcast-uuid",
         "nl-NL",
         /*public_feeds=*/ true,
+        None,
         &scraper,
         &head_cache,
     )

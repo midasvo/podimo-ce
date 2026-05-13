@@ -15,6 +15,28 @@ static EMAIL_RE: Lazy<Regex> =
 pub(crate) static PODCAST_ID_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[0-9a-fA-F\-]+$").expect("static regex compiles"));
 
+/// Matches a canonical RFC-4122 UUID (8-4-4-4-12 hex) anywhere in a string.
+/// Used to extract the podcast id from a pasted Podimo URL like
+/// `https://open.podimo.com/podcast/de9b2081-9fc5-489f-b9d3-d744ed9cab20`.
+static UUID_IN_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+        .expect("static regex compiles")
+});
+
+/// Returns the podcast id from raw user input. Accepts either a bare id
+/// (anything `PODCAST_ID_RE` already matches) or a Podimo URL with a UUID
+/// somewhere in its path. Returns `None` if neither applies.
+pub(crate) fn extract_podcast_id(input: &str) -> Option<&str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if PODCAST_ID_RE.is_match(trimmed) {
+        return Some(trimmed);
+    }
+    UUID_IN_URL_RE.find(trimmed).map(|m| m.as_str())
+}
+
 const HEX_CHARS: &[u8] = b"1234567890abcdef";
 
 pub(crate) fn random_hex_id(length: usize) -> String {
@@ -195,6 +217,50 @@ mod tests {
         assert!(PODCAST_ID_RE.is_match("1234567890"));
         assert!(!PODCAST_ID_RE.is_match("not-a-valid-id!"));
         assert!(!PODCAST_ID_RE.is_match(""));
+    }
+
+    #[test]
+    fn extract_podcast_id_passes_through_bare_id() {
+        assert_eq!(
+            extract_podcast_id("de9b2081-9fc5-489f-b9d3-d744ed9cab20"),
+            Some("de9b2081-9fc5-489f-b9d3-d744ed9cab20")
+        );
+        assert_eq!(extract_podcast_id("1234567890"), Some("1234567890"));
+    }
+
+    #[test]
+    fn extract_podcast_id_pulls_uuid_from_open_url() {
+        assert_eq!(
+            extract_podcast_id(
+                "https://open.podimo.com/podcast/de9b2081-9fc5-489f-b9d3-d744ed9cab20"
+            ),
+            Some("de9b2081-9fc5-489f-b9d3-d744ed9cab20")
+        );
+    }
+
+    #[test]
+    fn extract_podcast_id_pulls_uuid_from_shows_url() {
+        assert_eq!(
+            extract_podcast_id(
+                "https://podimo.com/nl-nl/shows/de9b2081-9fc5-489f-b9d3-d744ed9cab20?ref=share"
+            ),
+            Some("de9b2081-9fc5-489f-b9d3-d744ed9cab20")
+        );
+    }
+
+    #[test]
+    fn extract_podcast_id_trims_whitespace() {
+        assert_eq!(
+            extract_podcast_id("   de9b2081-9fc5-489f-b9d3-d744ed9cab20\n  "),
+            Some("de9b2081-9fc5-489f-b9d3-d744ed9cab20")
+        );
+    }
+
+    #[test]
+    fn extract_podcast_id_rejects_empty_and_garbage() {
+        assert_eq!(extract_podcast_id(""), None);
+        assert_eq!(extract_podcast_id("   "), None);
+        assert_eq!(extract_podcast_id("not a url and not an id"), None);
     }
 
     #[test]

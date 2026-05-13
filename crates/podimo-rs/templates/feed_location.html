@@ -1,28 +1,61 @@
 {% extends "base.html" %}
 
 {% block body %}
-Assuming your credentials were correct, your Podimo-to-RSS feed can be found at<br />
-<p>
-  {{ url }}
-</p>
+<section class="result">
+  <p class="kicker">Filed &middot; ready to subscribe</p>
+  <h2>Your Podimo-to-RSS feed is <em>live.</em></h2>
 
-Copy this link into your podcast player (only works if it supports custom private RSS feeds).
-<br />
-<br />
+  <div class="url-card">
+    <p class="label">Feed URL</p>
+    <p class="url" id="feed-url">{{ url }}</p>
+  </div>
 
-<div id="button"></div>
+  <div class="copy-row">
+    <div id="button"></div>
+    <span class="note">
+      Copy this link into your podcast player &mdash; works with any client
+      that supports custom private RSS feeds.
+    </span>
+  </div>
+
+  <a class="back-link" href="./">&larr; Make another feed</a>
+</section>
+
 <script>
-  let url = "{{ url }}"
-  function copy() {
-    navigator.clipboard.writeText(url).then(() => {
-      document.getElementById('copy').innerHTML = "Copied!";
-      setTimeout(setButtonDiv, 2000);
-    });
-  }
-  function setButtonDiv() {
-    document.getElementById("button").innerHTML = "<button id='copy' onclick='copy()'>Copy to your clipboard</button>";
-  }
-  setButtonDiv();
+  (function () {
+    var url = document.getElementById("feed-url").textContent.trim();
+
+    function mountButton(label) {
+      var host = document.getElementById("button");
+      host.innerHTML = "";
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.id = "copy";
+      btn.className = "primary";
+      btn.style.width = "auto";
+      btn.style.minWidth = "12rem";
+      btn.textContent = label;
+      btn.addEventListener("click", copy);
+      host.appendChild(btn);
+    }
+
+    function copy() {
+      if (!navigator.clipboard) {
+        mountButton("Clipboard unavailable");
+        return;
+      }
+      navigator.clipboard.writeText(url).then(function () {
+        var b = document.getElementById("copy");
+        if (b) b.textContent = "Copied!";
+        setTimeout(function () { mountButton("Copy to clipboard"); }, 2000);
+      }).catch(function () {
+        var b = document.getElementById("copy");
+        if (b) b.textContent = "Copy failed";
+      });
+    }
+
+    mountButton("Copy to clipboard");
+  })();
 </script>
 
 {% endblock %}

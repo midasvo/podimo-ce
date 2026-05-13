@@ -22,15 +22,21 @@ pub async fn podcasts_to_rss(
     podcast_id: &str,
     locale: &str,
     public_feeds: bool,
+    limit: Option<usize>,
     scraper: &Client,
     head_cache: &TtlCache<HeadInfo>,
 ) -> anyhow::Result<String> {
     let podcast = payload.get("podcast");
-    let episodes: &[Value] = payload
+    let all_episodes: &[Value] = payload
         .get("episodes")
         .and_then(|e| e.as_array())
         .map(Vec::as_slice)
         .unwrap_or(&[]);
+    // Episodes arrive PUBLISHED_DESCENDING; trimming the head keeps the N newest.
+    let episodes: &[Value] = match limit {
+        Some(n) => &all_episodes[..n.min(all_episodes.len())],
+        None => all_episodes,
+    };
     let last_episode = episodes.first();
 
     let title = first_non_null_string(&[
