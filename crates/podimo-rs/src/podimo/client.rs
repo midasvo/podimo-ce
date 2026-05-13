@@ -179,18 +179,25 @@ impl PodimoClient {
         Ok(())
     }
 
-    /// Page through `podcastEpisodes` 100 at a time. Returns the full payload
-    /// (the first page's structure with all episodes concatenated). Cached
-    /// as `Arc<Value>` so cache hits and the in-flight return share one
-    /// allocation — the payload can be megabytes for long-running shows.
+    /// Page through `podcastEpisodes` and return the payload. When `limit` is
+    /// `Some(n)`, fetch only as many pages as needed for `n` episodes — for a
+    /// 500-episode show with `limit=Some(20)` that's one GraphQL call instead
+    /// of six. When `None`, paginate until exhausted. Cached as `Arc<Value>`
+    /// keyed by `(podcast_id, limit)` so the user-facing `?limit=N` doesn't
+    /// poison the unlimited cache (and vice-versa).
     pub async fn get_podcasts(
         &self,
         scraper: &Client,
         config: &Config,
         podcast_id: &str,
+        limit: Option<usize>,
         podcast_cache: &TtlCache<Arc<Value>>,
     ) -> Result<Arc<Value>, ClientError> {
-        if let Some(cached) = podcast_cache.get(podcast_id).await {
+        let cache_key = match limit {
+            Some(n) => format!("{podcast_id}__{n}"),
+            None => format!("{podcast_id}__all"),
+        };
+        if let Some(cached) = podcast_cache.get(&cache_key).await {
             return Ok(cached);
         }
 
@@ -244,14 +251,19 @@ impl PodimoClient {
             }
         "#;
 
-        let limit = 100_i64;
+        const PAGE_MAX: i64 = 100;
         let mut offset = 0_i64;
+        let mut accumulated = 0_usize;
         let mut full: Option<Value> = None;
 
         loop {
+            let want_this_page: i64 = match limit {
+                Some(target) => (target - accumulated).min(PAGE_MAX as usize) as i64,
+                None => PAGE_MAX,
+            };
             let variables = json!({
                 "podcastId": podcast_id,
-                "limit": limit,
+                "limit": want_this_page,
                 "offset": offset,
                 "sorting": "PUBLISHED_DESCENDING",
             });
@@ -276,19 +288,118 @@ impl PodimoClient {
                 }
             }
 
-            if page_episodes_len == limit {
-                offset += limit;
-            } else {
+            accumulated += page_episodes_len as usize;
+            // Short page = upstream is exhausted; satisfied = caller's limit reached.
+            let short_page = page_episodes_len < want_this_page;
+            let satisfied = limit.is_some_and(|n| accumulated >= n);
+            if short_page || satisfied {
                 break;
             }
+            offset += page_episodes_len;
         }
 
         let result = full.ok_or_else(|| ClientError::Upstream("no episodes returned".into()))?;
         let arc = Arc::new(result);
-        podcast_cache
-            .insert(podcast_id.to_string(), Arc::clone(&arc))
+        podcast_cache.insert(cache_key, Arc::clone(&arc)).await;
+        Ok(arc)
+    }
+
+    /// Fetch the metadata for a single audiobook via `audiobookById`. Cached as
+    /// `Arc<Value>` keyed by `audiobook_id`. The schema mirrors what
+    /// `audiobook-dl` uses, including `authors`, `narrators`, and
+    /// `coverImage.url`.
+    pub async fn get_audiobook(
+        &self,
+        scraper: &Client,
+        config: &Config,
+        audiobook_id: &str,
+        meta_cache: &TtlCache<Arc<Value>>,
+    ) -> Result<Arc<Value>, ClientError> {
+        if let Some(cached) = meta_cache.get(audiobook_id).await {
+            return Ok(cached);
+        }
+
+        let token = self
+            .token
+            .as_deref()
+            .ok_or_else(|| ClientError::InvalidCredentials("login not yet completed".into()))?;
+        let headers = generate_headers(Some(token), &self.locale);
+
+        // The full upstream query has many fragments + a side-channel
+        // `audiobookExternalPurchaseLink`. We only need the fields used in RSS
+        // rendering, so the query below is a trimmed-down equivalent.
+        let query = r#"
+            query AudiobookResultsQuery($id: String!) {
+                audiobookById(id: $id) {
+                    id
+                    title
+                    authorNames
+                    description
+                    duration
+                    publisherName
+                    yearOfBookPublication
+                    authors { name }
+                    narrators { name }
+                    coverImage { url }
+                    language { isoLanguage }
+                }
+            }
+        "#;
+        let variables = json!({ "id": audiobook_id });
+        let data = post_graphql(scraper, config, &headers, query, &variables).await?;
+        // GraphQL can return `data.audiobookById: null` for a non-existent id
+        // without surfacing it as an `errors[]` block. Treat that as not-found.
+        if data
+            .get("audiobookById")
+            .map(|v| v.is_null())
+            .unwrap_or(true)
+        {
+            return Err(ClientError::GraphQl("audiobook not found".into()));
+        }
+
+        let arc = Arc::new(data);
+        meta_cache
+            .insert(audiobook_id.to_string(), Arc::clone(&arc))
             .await;
         Ok(arc)
+    }
+
+    /// Fetch the short-lived signed audio URL for an audiobook. Cached with a
+    /// short TTL since the upstream URL itself expires.
+    pub async fn get_audiobook_audio_url(
+        &self,
+        scraper: &Client,
+        config: &Config,
+        audiobook_id: &str,
+        audio_cache: &TtlCache<String>,
+    ) -> Result<String, ClientError> {
+        if let Some(cached) = audio_cache.get(audiobook_id).await {
+            return Ok(cached);
+        }
+
+        let token = self
+            .token
+            .as_deref()
+            .ok_or_else(|| ClientError::InvalidCredentials("login not yet completed".into()))?;
+        let headers = generate_headers(Some(token), &self.locale);
+
+        let query = r#"
+            query ShortLivedAudiobookMediaUrlQuery($id: String!) {
+                audiobookAudioById(audiobookId: $id) {
+                    url
+                }
+            }
+        "#;
+        let variables = json!({ "id": audiobook_id });
+        let data = post_graphql(scraper, config, &headers, query, &variables).await?;
+
+        let url = get_str(&data, &["audiobookAudioById", "url"])
+            .ok_or_else(|| ClientError::GraphQl("no audiobook audio url in response".into()))?
+            .to_string();
+        audio_cache
+            .insert(audiobook_id.to_string(), url.clone())
+            .await;
+        Ok(url)
     }
 }
 

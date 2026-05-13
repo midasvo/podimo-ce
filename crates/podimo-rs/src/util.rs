@@ -37,6 +37,38 @@ pub(crate) fn extract_podcast_id(input: &str) -> Option<&str> {
     UUID_IN_URL_RE.find(trimmed).map(|m| m.as_str())
 }
 
+/// Distinguishes the two content kinds the proxy supports.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum PodimoKind {
+    Podcast,
+    Audiobook,
+}
+
+impl PodimoKind {
+    /// URL path segment used when building the proxy-side feed link.
+    pub(crate) fn route_segment(self) -> &'static str {
+        match self {
+            PodimoKind::Podcast => "feed",
+            PodimoKind::Audiobook => "audiobook",
+        }
+    }
+}
+
+/// Detects whether a pasted Podimo URL is an audiobook or a podcast, and
+/// extracts the UUID. A bare UUID (no surrounding URL) defaults to podcast for
+/// backwards compatibility with the old single-content-type form. Returns
+/// `None` if no UUID can be found.
+pub(crate) fn parse_podimo_input(input: &str) -> Option<(PodimoKind, &str)> {
+    let id = extract_podcast_id(input)?;
+    let lower = input.to_ascii_lowercase();
+    let kind = if lower.contains("/audiobook/") || lower.contains("/audioboek/") {
+        PodimoKind::Audiobook
+    } else {
+        PodimoKind::Podcast
+    };
+    Some((kind, id))
+}
+
 const HEX_CHARS: &[u8] = b"1234567890abcdef";
 
 pub(crate) fn random_hex_id(length: usize) -> String {
@@ -261,6 +293,65 @@ mod tests {
         assert_eq!(extract_podcast_id(""), None);
         assert_eq!(extract_podcast_id("   "), None);
         assert_eq!(extract_podcast_id("not a url and not an id"), None);
+    }
+
+    #[test]
+    fn parse_podimo_input_bare_uuid_defaults_to_podcast() {
+        let (kind, id) =
+            parse_podimo_input("de9b2081-9fc5-489f-b9d3-d744ed9cab20").expect("parses");
+        assert_eq!(kind, PodimoKind::Podcast);
+        assert_eq!(id, "de9b2081-9fc5-489f-b9d3-d744ed9cab20");
+    }
+
+    #[test]
+    fn parse_podimo_input_audiobook_url_detected() {
+        let (kind, id) = parse_podimo_input(
+            "https://open.podimo.com/audiobook/fefa939e-c84d-4c16-8bbf-9575e1379d81",
+        )
+        .expect("parses");
+        assert_eq!(kind, PodimoKind::Audiobook);
+        assert_eq!(id, "fefa939e-c84d-4c16-8bbf-9575e1379d81");
+    }
+
+    #[test]
+    fn parse_podimo_input_podcast_url_detected() {
+        let (kind, id) = parse_podimo_input(
+            "https://open.podimo.com/podcast/de9b2081-9fc5-489f-b9d3-d744ed9cab20",
+        )
+        .expect("parses");
+        assert_eq!(kind, PodimoKind::Podcast);
+        assert_eq!(id, "de9b2081-9fc5-489f-b9d3-d744ed9cab20");
+    }
+
+    #[test]
+    fn parse_podimo_input_shows_url_treated_as_podcast() {
+        let (kind, _id) = parse_podimo_input(
+            "https://podimo.com/nl-nl/shows/de9b2081-9fc5-489f-b9d3-d744ed9cab20",
+        )
+        .expect("parses");
+        assert_eq!(kind, PodimoKind::Podcast);
+    }
+
+    #[test]
+    fn parse_podimo_input_dutch_audioboek_url_detected() {
+        // Defensive: Podimo localises some paths; accept `/audioboek/` too.
+        let (kind, _id) = parse_podimo_input(
+            "https://podimo.com/nl-nl/audioboek/fefa939e-c84d-4c16-8bbf-9575e1379d81",
+        )
+        .expect("parses");
+        assert_eq!(kind, PodimoKind::Audiobook);
+    }
+
+    #[test]
+    fn parse_podimo_input_rejects_garbage() {
+        assert!(parse_podimo_input("").is_none());
+        assert!(parse_podimo_input("hello world").is_none());
+    }
+
+    #[test]
+    fn route_segment_matches_handlers() {
+        assert_eq!(PodimoKind::Podcast.route_segment(), "feed");
+        assert_eq!(PodimoKind::Audiobook.route_segment(), "audiobook");
     }
 
     #[test]

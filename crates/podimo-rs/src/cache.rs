@@ -1,9 +1,11 @@
 //! Caches with TTL semantics.
 //!
-//! Three caches:
-//!   - `tokens`   — login token by `sha256(username~password)`. Optionally persisted to disk.
-//!   - `podcasts` — full episode list per podcast id, JSON value. Persisted.
-//!   - `head`     — `(content_length, content_type)` per episode id. Persisted.
+//! Five caches:
+//!   - `tokens`           — login token by `sha256(username~password)`. Optionally persisted to disk.
+//!   - `podcasts`         — full episode list per podcast id, JSON value. Persisted.
+//!   - `audiobook_meta`   — `audiobookById` metadata payload per audiobook id. Persisted.
+//!   - `audiobook_audio`  — short-lived signed audio URL per audiobook id. Persisted; short TTL.
+//!   - `head`             — `(content_length, content_type)` per episode/audiobook id. Persisted.
 //!
 //! Disk format: one bincode file per entry under `<cache_dir>/<name>/<key>.bin`.
 //! Each file contains `(expiry_unix_seconds, value_bytes)`. Wipe `<cache_dir>` to reset.
@@ -27,15 +29,19 @@ pub struct HeadInfo {
 pub struct Caches {
     pub(crate) tokens: TtlCache<String>,
     pub(crate) podcasts: TtlCache<Arc<serde_json::Value>>,
+    pub(crate) audiobook_meta: TtlCache<Arc<serde_json::Value>>,
+    pub(crate) audiobook_audio: TtlCache<String>,
     pub head: TtlCache<HeadInfo>,
 }
 
 impl Caches {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn init(
         cache_dir: &str,
         store_tokens_on_disk: bool,
         token_ttl: u64,
         podcast_ttl: u64,
+        audiobook_audio_ttl: u64,
         head_ttl: u64,
     ) -> Self {
         let root = PathBuf::from(cache_dir);
@@ -55,6 +61,21 @@ impl Caches {
             Duration::from_secs(podcast_ttl),
         )
         .await;
+        // Audiobook metadata is static-ish — reuse the podcast TTL.
+        let audiobook_meta = TtlCache::new(
+            "audiobook_meta",
+            Some(root.join("audiobook_meta_cache")),
+            Duration::from_secs(podcast_ttl),
+        )
+        .await;
+        // Audio URL is signed and expires upstream; keep our cache TTL short so
+        // podcatchers never play through a dead link.
+        let audiobook_audio = TtlCache::new(
+            "audiobook_audio",
+            Some(root.join("audiobook_audio_cache")),
+            Duration::from_secs(audiobook_audio_ttl),
+        )
+        .await;
         let head = TtlCache::new(
             "head",
             Some(root.join("head_cache")),
@@ -65,6 +86,8 @@ impl Caches {
         Self {
             tokens,
             podcasts,
+            audiobook_meta,
+            audiobook_audio,
             head,
         }
     }

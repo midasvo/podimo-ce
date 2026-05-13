@@ -32,6 +32,10 @@ pub struct Config {
     pub token_cache_time: u64,
     pub podcast_cache_time: u64,
     pub head_cache_time: u64,
+    /// TTL for the short-lived audiobook audio URL (`ShortLivedAudiobookMediaUrlQuery`).
+    /// The URL is signed and expires upstream; default keeps it brief so podcatchers
+    /// always see a fresh link.
+    pub audiobook_audio_cache_time: u64,
 
     pub public_feeds: bool,
 
@@ -69,6 +73,7 @@ impl Config {
             token_cache_time: env_u64("TOKEN_CACHE_TIME", 3600 * 24 * 5),
             podcast_cache_time: env_u64("PODCAST_CACHE_TIME", 21_600),
             head_cache_time: env_u64("HEAD_CACHE_TIME", 7 * 60 * 60 * 24),
+            audiobook_audio_cache_time: env_u64("AUDIOBOOK_AUDIO_CACHE_TIME", 600),
 
             public_feeds: env_bool("PUBLIC_FEEDS", false),
 
@@ -98,6 +103,7 @@ impl Config {
         tracing::info!(target: "podimo", "TOKEN_CACHE_TIME: {} sec", self.token_cache_time);
         tracing::info!(target: "podimo", "PODCAST_CACHE_TIME: {} sec", self.podcast_cache_time);
         tracing::info!(target: "podimo", "HEAD_CACHE_TIME: {} sec", self.head_cache_time);
+        tracing::info!(target: "podimo", "AUDIOBOOK_AUDIO_CACHE_TIME: {} sec", self.audiobook_audio_cache_time);
     }
 }
 

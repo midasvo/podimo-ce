@@ -24,6 +24,7 @@ pub async fn app(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::healthz::router())
         .merge(handlers::index::router())
         .merge(handlers::feed::router())
+        .merge(handlers::audiobook::router())
         .fallback(handlers::not_found::fallback)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

@@ -36,6 +36,7 @@ fn make_config(graphql_url: String) -> Config {
         token_cache_time: 60,
         podcast_cache_time: 60,
         head_cache_time: 60,
+        audiobook_audio_cache_time: 60,
         public_feeds: false,
         graphql_url,
     }
@@ -221,6 +222,117 @@ async fn other_upstream_error_returns_500() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 500);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn limit_query_param_avoids_full_pagination() {
+    // Build an episodes mock that returns a full page (100 eps) every time. Without
+    // a limit the handler would paginate forever — with `?limit=20` it must stop
+    // after the first page. We assert by counting ChannelEpisodesQuery calls.
+    let server = MockServer::start().await;
+    let ep_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ep_calls_for_mock = std::sync::Arc::clone(&ep_calls);
+
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let query = body.get("query").and_then(|q| q.as_str()).unwrap_or("");
+            if query.contains("AuthorizationPreregisterUser") {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": { "tokenWithPreregisterUser": { "token": "preauth-token" } }
+                }))
+            } else if query.contains("OnboardingQuery") {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": { "userOnboardingFlow": { "id": "onboarding-id" } }
+                }))
+            } else if query.contains("AuthorizationAuthorize") {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": { "tokenWithCredentials": { "token": "user-token" } }
+                }))
+            } else if query.contains("ChannelEpisodesQuery") {
+                ep_calls_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Hand back exactly the per-page-size the caller asked for. With
+                // limit=20 the request is for 20 → 20 returned (short page → loop
+                // exits naturally). Without a limit (or limit > 100) the per-page
+                // size is 100 → 100 returned → pagination would continue.
+                let vars = body.get("variables").cloned().unwrap_or(Value::Null);
+                let want = vars
+                    .get("limit")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(100)
+                    .max(0) as usize;
+                let mut eps = Vec::with_capacity(want);
+                for i in 0..want {
+                    eps.push(json!({
+                        "id": format!("ep{i}"),
+                        "title": format!("Episode {i}"),
+                        "description": "",
+                        "publishDatetime": "2024-01-01T12:00:00Z",
+                        "datetime": "2024-01-01T12:00:00Z",
+                        "imageUrl": "https://example.com/ep.jpg",
+                        "audio": { "url": format!("https://example.com/ep{i}.mp3"), "duration": 1 },
+                        "streamMedia": null,
+                        "artist": "Author",
+                        "podcastName": "Test Show"
+                    }));
+                }
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": {
+                        "podcast": {
+                            "title": "Test Show",
+                            "description": "Hello world",
+                            "webAddress": null,
+                            "authorName": "Author",
+                            "language": "nl",
+                            "images": { "coverImageUrl": "https://example.com/cover.jpg" }
+                        },
+                        "episodes": eps,
+                    }
+                }))
+            } else {
+                ResponseTemplate::new(500).set_body_string("unexpected graphql query")
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let config = make_config(format!("{}/graphql", server.uri()));
+    let state = AppState::new(config).await.unwrap();
+    // Pre-populate head cache so HEAD probes short-circuit for all 20 episode ids.
+    for i in 0..20 {
+        state
+            .caches
+            .head
+            .insert(
+                format!("ep{i}"),
+                HeadInfo {
+                    content_length: "1".into(),
+                    content_type: "audio/mpeg".into(),
+                },
+            )
+            .await;
+    }
+
+    let (addr, handle) = boot_with_state(state).await;
+    let resp = http_client()
+        .get(format!("http://{addr}/feed/{PODCAST_ID}.xml?limit=20"))
+        .header("Authorization", basic_auth("a@b.com,nl,nl-NL", "pw"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // limit=20 ≤ PAGE_MAX(100), so exactly one ChannelEpisodesQuery should fire.
+    assert_eq!(
+        ep_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "limit=20 must trigger exactly 1 ChannelEpisodesQuery, not full pagination"
+    );
+
+    let body = resp.text().await.unwrap();
+    assert_eq!(body.matches("<item>").count(), 20, "want 20 items in feed");
     handle.abort();
 }
 

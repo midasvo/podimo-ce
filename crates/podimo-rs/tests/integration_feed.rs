@@ -30,6 +30,7 @@ fn make_test_config<F: FnOnce(&mut Config)>(tweak: F) -> Config {
         token_cache_time: 60,
         podcast_cache_time: 60,
         head_cache_time: 60,
+        audiobook_audio_cache_time: 60,
         public_feeds: false,
         graphql_url: "https://example.invalid/graphql".into(),
     };
@@ -210,7 +211,7 @@ async fn index_get_renders_form() {
     assert!(body.contains("Podimo-to-RSS"), "body: {body}");
     assert!(body.contains("email"));
     assert!(body.contains("password"));
-    assert!(body.contains("Podcast ID"));
+    assert!(body.contains("Podcast or audiobook"));
     handle.abort();
 }
 
@@ -226,6 +227,66 @@ async fn unknown_path_returns_404_text_plain() {
     assert_eq!(resp.headers().get("content-type").unwrap(), "text/plain");
     let body = resp.text().await.unwrap();
     assert!(body.starts_with("404 Not found"));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn post_root_with_audiobook_url_generates_audiobook_route() {
+    // The form auto-detects audiobook URLs and emits a /audiobook/<id>.xml URL.
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .post(format!("http://{addr}/"))
+        .form(&[
+            ("email", "a@b.com"),
+            ("password", "pw"),
+            (
+                "podcast_id",
+                "https://open.podimo.com/audiobook/fefa939e-c84d-4c16-8bbf-9575e1379d81",
+            ),
+            ("region", "nl"),
+            ("locale", "nl-NL"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Minijinja HTML-escapes slashes (`&#x2f;`), so substring-match the parts.
+    assert!(
+        body.contains("audiobook&#x2f;fefa939e-c84d-4c16-8bbf-9575e1379d81.xml"),
+        "audiobook URL not in generated link: {body}"
+    );
+    assert!(
+        !body.contains("feed&#x2f;fefa939e"),
+        "should not also build a /feed/ URL: {body}"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn post_root_with_podcast_url_generates_feed_route() {
+    let (addr, handle) = boot().await;
+    let resp = http_client()
+        .post(format!("http://{addr}/"))
+        .form(&[
+            ("email", "a@b.com"),
+            ("password", "pw"),
+            (
+                "podcast_id",
+                "https://open.podimo.com/podcast/de9b2081-9fc5-489f-b9d3-d744ed9cab20",
+            ),
+            ("region", "nl"),
+            ("locale", "nl-NL"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("feed&#x2f;de9b2081-9fc5-489f-b9d3-d744ed9cab20.xml"),
+        "podcast feed URL not present: {body}"
+    );
     handle.abort();
 }
 

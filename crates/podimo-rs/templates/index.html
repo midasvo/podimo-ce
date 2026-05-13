@@ -64,7 +64,7 @@
   {% endif %}
 
   <div class="field">
-    <label for="podcast_id">Podcast ID or Podimo URL</label>
+    <label for="podcast_id">Podcast or audiobook URL / ID</label>
     <input
       required
       name="podcast_id"
@@ -75,8 +75,10 @@
       autocorrect="off"
     />
     <span class="hint">
-      Paste the show&rsquo;s UUID, or the full URL &mdash; e.g.
-      <code>https://open.podimo.com/podcast/de9b2081-9fc5-489f-b9d3-d744ed9cab20</code>.
+      Paste the UUID, or the full URL &mdash; e.g.
+      <code>https://open.podimo.com/podcast/&hellip;</code> or
+      <code>https://open.podimo.com/audiobook/&hellip;</code>. Audiobooks are
+      auto-detected and rendered as a single-item RSS feed.
     </span>
   </div>
 

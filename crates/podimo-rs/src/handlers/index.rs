@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{is_known_locale, is_known_region, LOCALES, REGIONS};
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::util::{extract_podcast_id, random_hex_id, PODCAST_ID_RE};
+use crate::util::{parse_podimo_input, random_hex_id, PodimoKind, PODCAST_ID_RE};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/", get(render_form).post(handle_submit))
@@ -70,14 +70,17 @@ async fn handle_submit(State(state): State<AppState>, Form(form): Form<SubmitFor
             error.push_str("Password is required");
         }
     }
-    // Users may paste a full Podimo URL (e.g. https://open.podimo.com/podcast/<uuid>);
-    // extract_podcast_id pulls the UUID out and leaves a bare id alone.
-    let raw_podcast_id = form.podcast_id.as_deref().unwrap_or("");
-    let podcast_id = extract_podcast_id(raw_podcast_id).unwrap_or("");
-    if raw_podcast_id.trim().is_empty() {
-        error.push_str("Podcast ID is required");
+    // Accept either a bare UUID or a full Podimo URL. For URLs we additionally
+    // detect whether it's an audiobook (`/audiobook/<uuid>`) or a podcast.
+    let raw_input = form.podcast_id.as_deref().unwrap_or("");
+    let (kind, podcast_id) = match parse_podimo_input(raw_input) {
+        Some((k, id)) => (k, id),
+        None => (PodimoKind::Podcast, ""),
+    };
+    if raw_input.trim().is_empty() {
+        error.push_str("Podcast or audiobook ID is required");
     } else if podcast_id.is_empty() || !PODCAST_ID_RE.is_match(podcast_id) {
-        error.push_str("Podcast ID is not valid");
+        error.push_str("ID is not valid");
     }
 
     let region = form.region.as_deref().unwrap_or("");
@@ -101,12 +104,14 @@ async fn handle_submit(State(state): State<AppState>, Form(form): Form<SubmitFor
     let podcast_id_q = urlencoding::encode(podcast_id);
     let region_q = urlencoding::encode(region);
     let locale_q = urlencoding::encode(locale);
+    let route = kind.route_segment();
 
     let url = if state.config.local_credentials {
         format!(
-            "{proto}://{host}/feed/{pid}.xml?{rand}&region={r}&locale={l}",
+            "{proto}://{host}/{route}/{pid}.xml?{rand}&region={r}&locale={l}",
             proto = state.config.protocol,
             host = state.config.hostname,
+            route = route,
             pid = podcast_id_q,
             rand = random_hex_id(10),
             r = region_q,
@@ -119,7 +124,7 @@ async fn handle_submit(State(state): State<AppState>, Form(form): Form<SubmitFor
         let password_q = urlencoding::encode(password);
         let comma = urlencoding::encode(",");
         format!(
-            "{proto}://{email}{comma}{region}{comma}{locale}:{password}@{host}/feed/{pid}.xml?{rand}&region={r}&locale={l}",
+            "{proto}://{email}{comma}{region}{comma}{locale}:{password}@{host}/{route}/{pid}.xml?{rand}&region={r}&locale={l}",
             proto = state.config.protocol,
             email = email_q,
             comma = comma,
@@ -127,6 +132,7 @@ async fn handle_submit(State(state): State<AppState>, Form(form): Form<SubmitFor
             locale = locale_q,
             password = password_q,
             host = state.config.hostname,
+            route = route,
             pid = podcast_id_q,
             rand = random_hex_id(10),
             r = region_q,

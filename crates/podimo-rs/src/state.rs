@@ -28,6 +28,7 @@ impl AppState {
             config.store_tokens_on_disk,
             config.token_cache_time,
             config.podcast_cache_time,
+            config.audiobook_audio_cache_time,
             config.head_cache_time,
         )
         .await;

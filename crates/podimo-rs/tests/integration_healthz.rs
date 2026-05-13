@@ -27,6 +27,7 @@ async fn healthz_returns_200_json() {
         token_cache_time: 60,
         podcast_cache_time: 60,
         head_cache_time: 60,
+        audiobook_audio_cache_time: 60,
         public_feeds: false,
         graphql_url: "https://example.invalid/graphql".into(),
     };

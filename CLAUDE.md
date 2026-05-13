@@ -8,6 +8,12 @@ Self-hosted RSS proxy for Podimo. Rust service: axum on tokio, reqwest for
 outbound, moka + bincode for caches, minijinja for the form templates, the
 `rss` crate for output. Single binary `podimo-rs` listens on port 12104.
 
+Endpoints:
+- `GET /feed/<podcast_id>.xml[?limit=N]` — podcast feed, optionally trimmed to
+  the latest N episodes.
+- `GET /audiobook/<audiobook_id>.xml` — single-item RSS feed for one Podimo
+  audiobook (the book itself is the lone episode).
+
 History: this was a Python service (Quart on Hypercorn), itself a fork of
 `ThijsRay/podimo`. The Rust rewrite landed in PR #2 and replaced Python at the
 root in PR #3. The Python source isn't in the tree anymore — `git log` from
@@ -51,12 +57,13 @@ Docker build matches CI: `docker build -t podimo-rs:test .` then
 │       │   │   ├── healthz.rs       # GET /healthz
 │       │   │   ├── index.rs         # GET/POST /
 │       │   │   ├── feed.rs          # GET /feed/<id>.xml
+│       │   │   ├── audiobook.rs     # GET /audiobook/<id>.xml
 │       │   │   └── not_found.rs     # fallback
 │       │   ├── middleware.rs        # after-request CORS + Cache-Control
 │       │   ├── podimo/
-│       │   │   ├── client.rs        # GraphQL login + getPodcasts
+│       │   │   ├── client.rs        # GraphQL login + getPodcasts + audiobook queries
 │       │   │   ├── head.rs          # episode HEAD probe with retries
-│       │   │   └── rss.rs           # podcasts_to_rss
+│       │   │   └── rss.rs           # podcasts_to_rss + audiobook_to_rss
 │       │   ├── cache.rs             # TtlCache + on-disk bincode persistence
 │       │   ├── blocklist.rs
 │       │   ├── templates.rs         # minijinja env (templates embedded with include_str!)
@@ -67,10 +74,12 @@ Docker build matches CI: `docker build -t podimo-rs:test .` then
 │       │   └── feed_location.html
 │       └── tests/
 │           ├── integration_healthz.rs
-│           ├── integration_feed.rs           # validation + middleware parity
-│           ├── integration_feed_upstream.rs  # wiremock-mocked GraphQL
-│           ├── integration_head.rs           # wiremock-mocked HEAD probe
-│           └── integration_rss.rs            # structural RSS rendering
+│           ├── integration_feed.rs                 # validation + middleware parity
+│           ├── integration_feed_upstream.rs        # wiremock-mocked GraphQL
+│           ├── integration_audiobook.rs            # audiobook validation + middleware
+│           ├── integration_audiobook_upstream.rs   # wiremock-mocked audiobook flow
+│           ├── integration_head.rs                 # wiremock-mocked HEAD probe
+│           └── integration_rss.rs                  # structural RSS rendering
 ```
 
 Feed request flow:
@@ -90,23 +99,48 @@ Feed request flow:
    The final token is cached under `sha256(username~password)` (see
    `util::token_key`).
 4. `PodimoClient::get_podcasts` pages through `podcastEpisodes` 100 at a time
-   and returns the raw GraphQL payload.
+   and returns the raw GraphQL payload. When `?limit=N` is set on the request,
+   pagination is short-circuited: only `ceil(N/100)` pages are fetched, and the
+   cache key is namespaced by limit so different limits don't poison one
+   another's cache.
 5. `podimo::rss::podcasts_to_rss` builds RSS via the `rss` crate's iTunes
    extensions and runs `url_head_info` HEAD probes for enclosure metadata in
-   chunks of 5 concurrent requests.
+   chunks of 10 concurrent requests.
+
+### Audiobook feed flow
+
+`GET /audiobook/<audiobook_id>.xml` mirrors the podcast endpoint (same
+basic-auth / region+locale / blocklist validation, same login flow) but
+dispatches to two GraphQL queries from `audiobook-dl`'s reverse-engineered
+schema:
+
+1. `audiobookById` — static-ish metadata (title, authors, narrators, cover,
+   duration). Cached for `PODCAST_CACHE_TIME` under `audiobook_meta_cache`.
+2. `audiobookAudioById` — short-lived signed audio URL. Cached for
+   `AUDIOBOOK_AUDIO_CACHE_TIME` (default 10 min) under `audiobook_audio_cache`,
+   so podcatchers that fetch the feed but defer playback still get a fresh
+   link on the next poll.
+
+The RSS render produces a one-channel-one-item feed: the audiobook itself is
+the lone episode. Narrators and publisher are appended to the item description
+since podcatchers don't have a first-class field for either.
 
 ### Caching (`crates/podimo-rs/src/cache.rs`)
 
-Three caches under `CACHE_DIR` (default `./cache`):
+Five caches under `CACHE_DIR` (default `./cache`):
 
 - `tokens_cache` — login tokens, TTL `TOKEN_CACHE_TIME` (5 days). In-memory
   only if `STORE_TOKENS_ON_DISK=false`; otherwise shadowed to disk.
 - `podcast_cache` — full GraphQL payload per podcast, TTL `PODCAST_CACHE_TIME`
   (6 h). Determines how often new episodes appear in the feed.
-- `head_cache` — `HeadInfo { content_length, content_type }` per episode id,
-  TTL `HEAD_CACHE_TIME` (7 days). Read via `get_no_expire` so the on-disk
-  record survives expiry (we always re-probe HEAD on expiry, but the historical
-  record is kept for inspection).
+- `audiobook_meta_cache` — `audiobookById` payload per audiobook, same TTL as
+  `podcast_cache`.
+- `audiobook_audio_cache` — signed audio URL per audiobook, TTL
+  `AUDIOBOOK_AUDIO_CACHE_TIME` (10 min). Short on purpose.
+- `head_cache` — `HeadInfo { content_length, content_type }` per episode id
+  (or `audiobook__<id>` for audiobooks), TTL `HEAD_CACHE_TIME` (7 days). Read
+  via `get_no_expire` so the on-disk record survives expiry (we always re-probe
+  HEAD on expiry, but the historical record is kept for inspection).
 
 `TtlCache<V>` wraps `moka::future::Cache` for in-memory TTL eviction and
 shadows each entry as a bincode blob under `<CACHE_DIR>/<name>/<key>.bin`. On
@@ -186,3 +220,9 @@ manual dispatch. Multi-arch (linux/amd64, linux/arm64).
 - **Side-by-side production test** — never validated against the live Podimo
   upstream; only against wiremock fakes. Worth a one-off comparison before
   treating any new behaviour as authoritative.
+- **Audiobook chapters** — the `audiobookAudioById` query returns a single
+  audio URL with no chapter metadata, and a brief search turned up no
+  `audiobookChaptersById`-style query in any reverse-engineered Podimo client.
+  For now the audiobook feed is one blob = one item. Future work: explore the
+  app's actual network traffic to see whether chapters live behind a separate
+  GraphQL field, then split into per-chapter RSS items.

@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use podimo_rs::cache::{HeadInfo, TtlCache};
-use podimo_rs::podimo::rss::podcasts_to_rss;
+use podimo_rs::podimo::rss::{audiobook_to_rss, podcasts_to_rss};
 use reqwest::Client;
 use serde_json::json;
 
@@ -263,4 +263,113 @@ async fn podcasts_to_rss_sets_itunes_block_when_public_feeds_disabled() {
         !rss_public.contains("itunes:block"),
         "PUBLIC_FEEDS=true must NOT emit itunes:block: {rss_public}"
     );
+}
+
+fn fixed_audiobook_payload() -> serde_json::Value {
+    json!({
+        "audiobookById": {
+            "id": "abuid",
+            "title": "The Test Book",
+            "authorNames": "Auteur A",
+            "description": "Lorem ipsum.",
+            "duration": 7200,
+            "publisherName": "Testers Publishing",
+            "yearOfBookPublication": 2024,
+            "authors": [{"name": "Auteur A"}],
+            "narrators": [{"name": "Verteller B"}, {"name": "Verteller C"}],
+            "coverImage": {"url": "https://example.com/cover.jpg"},
+            "language": {"isoLanguage": "nl"}
+        }
+    })
+}
+
+#[tokio::test]
+async fn audiobook_to_rss_renders_single_item_with_metadata() {
+    let head_cache = stub_head_cache_for(&["audiobook__abuid"], "99999", "audio/mpeg").await;
+    let scraper = Client::new();
+
+    let rss = audiobook_to_rss(
+        &fixed_audiobook_payload(),
+        "https://example.com/audiobook.mp3",
+        "abuid",
+        "nl-NL",
+        false,
+        &scraper,
+        &head_cache,
+    )
+    .await
+    .expect("render");
+
+    assert!(rss.contains("<rss"));
+    assert_eq!(rss.matches("<item>").count(), 1, "audiobook = single item");
+    assert!(rss.contains("<title>The Test Book</title>"));
+    assert!(rss.contains("<itunes:author>Auteur A</itunes:author>"));
+    assert!(rss.contains("<itunes:duration>7200</itunes:duration>"));
+    assert!(rss.contains("https://example.com/audiobook.mp3"));
+    assert!(rss.contains("99999"));
+    assert!(rss.contains("audio/mpeg"));
+    // Narrators + publisher merged into the item description.
+    assert!(rss.contains("Verteller B, Verteller C"));
+    assert!(rss.contains("Testers Publishing"));
+    // GUID is the audiobook id, not the (rotating) audio URL.
+    assert!(rss.contains("abuid"));
+    // pubDate derived from yearOfBookPublication.
+    assert!(rss.contains("2024"));
+    // Link points at the Podimo share page.
+    assert!(rss.contains("https://open.podimo.com/audiobook/abuid"));
+}
+
+#[tokio::test]
+async fn audiobook_to_rss_uses_authors_array_when_author_names_absent() {
+    let head_cache = stub_head_cache_for(&["audiobook__abuid"], "0", "audio/mpeg").await;
+    let scraper = Client::new();
+
+    let mut payload = fixed_audiobook_payload();
+    payload["audiobookById"]["authorNames"] = serde_json::Value::Null;
+
+    let rss = audiobook_to_rss(
+        &payload,
+        "https://example.com/audiobook.mp3",
+        "abuid",
+        "nl-NL",
+        false,
+        &scraper,
+        &head_cache,
+    )
+    .await
+    .expect("render");
+
+    assert!(rss.contains("<itunes:author>Auteur A</itunes:author>"));
+}
+
+#[tokio::test]
+async fn audiobook_to_rss_sets_itunes_block_when_public_feeds_disabled() {
+    let head_cache = stub_head_cache_for(&["audiobook__abuid"], "0", "audio/mpeg").await;
+    let scraper = Client::new();
+
+    let rss_blocked = audiobook_to_rss(
+        &fixed_audiobook_payload(),
+        "https://example.com/audiobook.mp3",
+        "abuid",
+        "nl-NL",
+        /*public_feeds=*/ false,
+        &scraper,
+        &head_cache,
+    )
+    .await
+    .expect("render");
+    assert!(rss_blocked.contains("itunes:block"));
+
+    let rss_public = audiobook_to_rss(
+        &fixed_audiobook_payload(),
+        "https://example.com/audiobook.mp3",
+        "abuid",
+        "nl-NL",
+        /*public_feeds=*/ true,
+        &scraper,
+        &head_cache,
+    )
+    .await
+    .expect("render");
+    assert!(!rss_public.contains("itunes:block"));
 }

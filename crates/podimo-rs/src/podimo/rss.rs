@@ -15,7 +15,7 @@ use crate::podimo::head::url_head_info;
 use crate::util::jpg_fragment;
 
 const ITUNES_NS: &str = "http://www.itunes.com/dtds/podcast-1.0.dtd";
-const CONCURRENT_HEAD_PROBES: usize = 5;
+const CONCURRENT_HEAD_PROBES: usize = 10;
 
 pub async fn podcasts_to_rss(
     payload: &Value,
@@ -122,6 +122,174 @@ pub async fn podcasts_to_rss(
 
     let channel = channel.build();
     Ok(channel.to_string())
+}
+
+/// Render a single-item RSS feed for one audiobook. Layout mirrors the podcast
+/// renderer (iTunes extensions, namespaces, channel image) so existing
+/// podcatchers handle it identically — the book itself is the lone episode.
+///
+/// `payload` is the GraphQL `data` block containing `audiobookById` (as returned
+/// by `PodimoClient::get_audiobook`). `audio_url` is the freshly-minted signed
+/// URL from `get_audiobook_audio_url`; we trust the caller to pass a fresh one.
+pub async fn audiobook_to_rss(
+    payload: &Value,
+    audio_url: &str,
+    audiobook_id: &str,
+    locale: &str,
+    public_feeds: bool,
+    scraper: &Client,
+    head_cache: &TtlCache<HeadInfo>,
+) -> anyhow::Result<String> {
+    let book = payload.get("audiobookById");
+
+    let title = first_non_null_string(&[book.and_then(|b| b.get("title"))])
+        .unwrap_or_else(|| "Podimo Audiobook".to_string());
+
+    let description =
+        first_non_null_string(&[book.and_then(|b| b.get("description"))]).unwrap_or_default();
+
+    let image = first_non_null_string(&[book
+        .and_then(|b| b.get("coverImage"))
+        .and_then(|c| c.get("url"))])
+    .map(|s| jpg_fragment(&s));
+
+    let language = first_non_null_string(&[book
+        .and_then(|b| b.get("language"))
+        .and_then(|l| l.get("isoLanguage"))])
+    .unwrap_or_else(|| locale.to_string());
+
+    // Prefer the joined `authorNames` string; fall back to authors[].name.
+    let author = first_non_null_string(&[book.and_then(|b| b.get("authorNames"))])
+        .or_else(|| collect_name_array(book.and_then(|b| b.get("authors"))))
+        .unwrap_or_default();
+
+    let narrators_str =
+        collect_name_array(book.and_then(|b| b.get("narrators"))).unwrap_or_default();
+
+    let publisher = first_non_null_string(&[book.and_then(|b| b.get("publisherName"))]);
+    let year = book
+        .and_then(|b| b.get("yearOfBookPublication"))
+        .and_then(|v| v.as_i64());
+    let duration = book
+        .and_then(|b| b.get("duration"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    let link = format!("https://open.podimo.com/audiobook/{audiobook_id}");
+
+    // Enclosure: HEAD-probe the (presumably freshly-minted) audio URL for size
+    // and mime. Same `url_head_info` path as podcasts — the head cache key
+    // namespace uses the audiobook id so we don't collide with episode HEADs.
+    let head_key = format!("audiobook__{audiobook_id}");
+    let head =
+        crate::podimo::head::url_head_info(scraper, head_cache, &head_key, audio_url, locale)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("HEAD probe failed for audiobook {audiobook_id}: {err}")
+            })?;
+
+    let enclosure = EnclosureBuilder::default()
+        .url(audio_url.to_string())
+        .length(head.content_length)
+        .mime_type(head.content_type)
+        .build();
+
+    let mut item_description = description.clone();
+    if !narrators_str.is_empty() {
+        if !item_description.is_empty() {
+            item_description.push_str("\n\n");
+        }
+        item_description.push_str("Verteld door: ");
+        item_description.push_str(&narrators_str);
+    }
+    if let Some(p) = &publisher {
+        if !item_description.is_empty() {
+            item_description.push_str("\n\n");
+        }
+        item_description.push_str("Uitgever: ");
+        item_description.push_str(p);
+    }
+
+    let pub_date = year.map(|y| format!("Thu, 01 Jan {y} 00:00:00 +0000"));
+
+    let mut itunes_item = ITunesItemExtensionBuilder::default();
+    if duration > 0 {
+        itunes_item.duration(Some(duration.to_string()));
+    }
+    if let Some(img) = image.clone() {
+        itunes_item.image(Some(img));
+    }
+
+    let item = ItemBuilder::default()
+        .guid(Some(
+            rss::GuidBuilder::default()
+                .value(audiobook_id.to_string())
+                .permalink(false)
+                .build(),
+        ))
+        .title(Some(title.clone()))
+        .description(Some(item_description))
+        .pub_date(pub_date)
+        .enclosure(Some(enclosure))
+        .itunes_ext(Some(itunes_item.build()))
+        .build();
+
+    let itunes_owner = ITunesOwnerBuilder::default()
+        .name(Some(author.clone()))
+        .build();
+    let mut itunes = ITunesChannelExtensionBuilder::default();
+    itunes
+        .author(Some(author.clone()))
+        .image(image.clone())
+        .owner(Some(itunes_owner));
+    if !public_feeds {
+        itunes.block(Some("Yes".to_string()));
+    }
+    let itunes = itunes.build();
+
+    let mut channel = ChannelBuilder::default();
+    let channel_description = if description.is_empty() {
+        title.clone()
+    } else {
+        description.clone()
+    };
+    channel
+        .title(title.clone())
+        .description(channel_description)
+        .link(link.clone())
+        .language(Some(language))
+        .itunes_ext(Some(itunes))
+        .items(vec![item]);
+    let namespaces: BTreeMap<String, String> = [("itunes".to_string(), ITUNES_NS.to_string())]
+        .into_iter()
+        .collect();
+    channel.namespaces(namespaces);
+
+    if let Some(image_url) = image {
+        let image_obj = rss::ImageBuilder::default()
+            .url(image_url)
+            .title(title.clone())
+            .link(link)
+            .build();
+        channel.image(Some(image_obj));
+    }
+
+    let channel = channel.build();
+    Ok(channel.to_string())
+}
+
+fn collect_name_array(v: Option<&Value>) -> Option<String> {
+    let arr = v?.as_array()?;
+    let names: Vec<String> = arr
+        .iter()
+        .filter_map(|item| item.get("name").and_then(|n| n.as_str()).map(String::from))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
+    }
 }
 
 async fn build_item(
