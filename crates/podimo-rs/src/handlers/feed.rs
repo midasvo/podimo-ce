@@ -5,15 +5,13 @@ use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use std::collections::HashMap;
 
 use crate::config::{is_known_locale, is_known_region};
 use crate::error::AppError;
 use crate::podimo::{ClientError, PodimoClient};
 use crate::state::AppState;
-use crate::util::{amp_arg, split_username_region_locale, PODCAST_ID_RE};
+use crate::util::{amp_arg, parse_basic_auth, split_username_region_locale, PODCAST_ID_RE};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/feed/:podcast_id", get(serve))
@@ -152,38 +150,5 @@ async fn serve(
     }
 }
 
-/// Parses an HTTP Basic header. Returns `(username_field, password)`.
-fn parse_basic_auth(headers: &axum::http::HeaderMap) -> Option<(String, String)> {
-    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = raw
-        .strip_prefix("Basic ")
-        .or_else(|| raw.strip_prefix("basic "))?;
-    let decoded = BASE64.decode(token.trim()).ok()?;
-    let s = std::str::from_utf8(&decoded).ok()?;
-    let (user, pass) = s.split_once(':')?;
-    Some((user.to_string(), pass.to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_basic_auth() {
-        let mut h = axum::http::HeaderMap::new();
-        let raw = BASE64.encode("a@b.com,nl,nl-NL:secret");
-        h.insert(
-            header::AUTHORIZATION,
-            format!("Basic {raw}").parse().unwrap(),
-        );
-        let (user, pass) = parse_basic_auth(&h).unwrap();
-        assert_eq!(user, "a@b.com,nl,nl-NL");
-        assert_eq!(pass, "secret");
-    }
-
-    #[test]
-    fn missing_basic_auth_returns_none() {
-        let h = axum::http::HeaderMap::new();
-        assert!(parse_basic_auth(&h).is_none());
-    }
-}
+// `parse_basic_auth` lives in `util` so both feed and audiobook handlers share
+// the same implementation.

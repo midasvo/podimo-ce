@@ -54,6 +54,25 @@ impl PodimoKind {
     }
 }
 
+/// Parses an HTTP Basic header. Returns `(username_field, password)`. Shared
+/// between `/feed/*` and `/audiobook/*` handlers — both accept the same
+/// `email,region,locale:password` Basic-auth form.
+pub(crate) fn parse_basic_auth(headers: &axum::http::HeaderMap) -> Option<(String, String)> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine;
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = raw
+        .strip_prefix("Basic ")
+        .or_else(|| raw.strip_prefix("basic "))?;
+    let decoded = BASE64.decode(token.trim()).ok()?;
+    let s = std::str::from_utf8(&decoded).ok()?;
+    let (user, pass) = s.split_once(':')?;
+    Some((user.to_string(), pass.to_string()))
+}
+
 /// Detects whether a pasted Podimo URL is an audiobook or a podcast, and
 /// extracts the UUID. A bare UUID (no surrounding URL) defaults to podcast for
 /// backwards compatibility with the old single-content-type form. Returns
@@ -352,6 +371,27 @@ mod tests {
     fn route_segment_matches_handlers() {
         assert_eq!(PodimoKind::Podcast.route_segment(), "feed");
         assert_eq!(PodimoKind::Audiobook.route_segment(), "audiobook");
+    }
+
+    #[test]
+    fn parse_basic_auth_decodes_user_and_password() {
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use base64::Engine;
+        let mut h = axum::http::HeaderMap::new();
+        let raw = BASE64.encode("a@b.com,nl,nl-NL:secret");
+        h.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Basic {raw}").parse().unwrap(),
+        );
+        let (user, pass) = parse_basic_auth(&h).expect("decodes");
+        assert_eq!(user, "a@b.com,nl,nl-NL");
+        assert_eq!(pass, "secret");
+    }
+
+    #[test]
+    fn parse_basic_auth_missing_header_returns_none() {
+        let h = axum::http::HeaderMap::new();
+        assert!(parse_basic_auth(&h).is_none());
     }
 
     #[test]

@@ -9,8 +9,6 @@ use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use std::collections::HashMap;
 
 use crate::config::{is_known_locale, is_known_region};
@@ -18,7 +16,7 @@ use crate::error::AppError;
 use crate::handlers::feed::unauthorized_response;
 use crate::podimo::{ClientError, PodimoClient};
 use crate::state::AppState;
-use crate::util::{amp_arg, split_username_region_locale, PODCAST_ID_RE};
+use crate::util::{amp_arg, parse_basic_auth, split_username_region_locale, PODCAST_ID_RE};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/audiobook/:audiobook_id", get(serve))
@@ -142,18 +140,4 @@ async fn serve(
         Ok(rss) => (StatusCode::OK, [(header::CONTENT_TYPE, "text/xml")], rss).into_response(),
         Err(err) => AppError::Internal(format!("rss render: {err}")).into_response(),
     }
-}
-
-/// Parses an HTTP Basic header. Returns `(username_field, password)`. Kept
-/// local rather than re-exported from `feed.rs` so the two handlers can
-/// diverge in future without coupling.
-fn parse_basic_auth(headers: &axum::http::HeaderMap) -> Option<(String, String)> {
-    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = raw
-        .strip_prefix("Basic ")
-        .or_else(|| raw.strip_prefix("basic "))?;
-    let decoded = BASE64.decode(token.trim()).ok()?;
-    let s = std::str::from_utf8(&decoded).ok()?;
-    let (user, pass) = s.split_once(':')?;
-    Some((user.to_string(), pass.to_string()))
 }
