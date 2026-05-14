@@ -239,6 +239,12 @@ async fn audio_serves_done_file_with_attachment_header() {
         "Content-Disposition: {disp}"
     );
     assert!(disp.contains("Book dddd4444"), "filename: {disp}");
+    // Streaming response advertises a Content-Length so the browser shows a
+    // real progress bar instead of an indeterminate spinner.
+    assert_eq!(
+        resp.headers().get("content-length").unwrap(),
+        &b"FAKE-MP3-BYTES".len().to_string()
+    );
     let body = resp.bytes().await.unwrap();
     assert_eq!(&body[..], b"FAKE-MP3-BYTES");
     handle.abort();

@@ -22,7 +22,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::AsyncReadExt;
+use tokio_util::io::ReaderStream;
 
 use crate::error::AppError;
 use crate::library::{download, Library, LibraryEntry, Status};
@@ -371,34 +371,39 @@ async fn serve_cover(State(state): State<AppState>, Path(id): Path<String>) -> R
     serve_file(&path, "image/jpeg", None).await
 }
 
+/// Serve a file by streaming it through `tokio_util::io::ReaderStream` instead
+/// of buffering it. Critical for the audio path: audiobooks can be several
+/// gigabytes, so reading them fully into RAM would (a) blow the heap and
+/// (b) delay the first byte until the entire file is loaded.
 async fn serve_file(
     path: &PathBuf,
     content_type: &'static str,
     attachment: Option<&str>,
 ) -> Response {
-    let mut file = match tokio::fs::File::open(path).await {
+    let file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(_) => return AppError::NotFound.into_response(),
     };
-    let size = match file.metadata().await {
-        Ok(m) => Some(m.len()),
-        Err(_) => None,
-    };
-    // For modest sizes we just read into memory; the audio path is the only
-    // one where this can be big, and most audiobooks fit comfortably in RAM
-    // (under 1 GB). A future streaming impl can swap in a body stream here.
-    let mut buf = Vec::with_capacity(size.unwrap_or(0) as usize);
-    if let Err(err) = file.read_to_end(&mut buf).await {
-        return AppError::Internal(format!("read: {err}")).into_response();
-    }
+    // Metadata read is essentially free and gives us a `Content-Length` so the
+    // browser can render a real progress bar during the download.
+    let size = file.metadata().await.ok().map(|m| m.len());
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Some(size) = size {
+        if let Ok(v) = HeaderValue::from_str(&size.to_string()) {
+            headers.insert(header::CONTENT_LENGTH, v);
+        }
+    }
     if let Some(name) = attachment {
         if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
             headers.insert(header::CONTENT_DISPOSITION, v);
         }
     }
-    (StatusCode::OK, headers, Body::from(buf)).into_response()
+    (StatusCode::OK, headers, body).into_response()
 }
 
 fn filename_for(title: &str, ext: &str) -> String {
