@@ -132,11 +132,27 @@ a persistent audiobook library at `/library`:
   `Content-Disposition: attachment; filename="<title>.mp3"`.
 - `GET  /library/<id>/cover.jpg` — local cover image.
 
-Storage layout: `LIBRARY_DIR/<audiobook_uuid>/` containing `meta.json` (book
-metadata + status), `audio.mp3`, `cover.jpg`. Hydration on startup scans this
-tree; entries that crashed mid-download (status=queued/downloading) are
-forced to `Failed("interrupted by restart")` since the signed URL would be
-expired by the time we got here.
+Storage layout follows the Audiobookshelf convention so the same directory
+can be mounted into both this proxy and an ABS instance without
+restructuring:
+
+```
+LIBRARY_DIR/
+  <Author Name>/
+    <Book Title>/
+      <Book Title>.mp3      # audio (written via .partial → rename)
+      cover.jpg             # cover image
+      metadata.json         # Audiobookshelf-format metadata
+      podimo-state.json     # our internal state (UUID, status, progress)
+```
+
+Hydration on startup walks `LIBRARY_DIR/**/podimo-state.json`. Entries that
+crashed mid-download (status=queued/downloading) are forced to
+`Failed("interrupted by restart")` since the signed URL would be expired by
+the time we got here. Migration: any legacy `LIBRARY_DIR/<uuid>/meta.json`
+directories from before this layout get moved to `Author/Title/`,
+`audio.mp3` renamed to `<Title>.mp3`, and an ABS `metadata.json` dropped
+alongside.
 
 The library requires `LOCAL_CREDENTIALS=true` because library entries are
 inherently single-user and the background download task needs unattended

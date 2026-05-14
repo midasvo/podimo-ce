@@ -1,14 +1,27 @@
 //! Audiobook library — persistent on-disk store with an in-memory index.
 //!
-//! Each book lives in `LIBRARY_DIR/<audiobook_uuid>/`:
-//!   - `meta.json` — book metadata + current status, written atomically.
-//!   - `audio.mp3` — downloaded audio (large; written via `.partial` → rename).
-//!   - `cover.jpg` — downloaded cover image.
+//! On-disk layout follows Audiobookshelf's convention so the same directory
+//! can be mounted into an Audiobookshelf library root without rearranging:
 //!
-//! Hydration: on startup the library scans `LIBRARY_DIR/*/meta.json` and rebuilds
-//! the in-memory map. Any entries left in `Queued`/`Downloading` are forced to
-//! `Failed("interrupted")` — we don't try to resume cross-process because the
-//! signed audio URL is short-lived and would be invalid by the time we got here.
+//! ```text
+//! LIBRARY_DIR/
+//!   <Author Name>/
+//!     <Book Title>/
+//!       <Book Title>.mp3      # the audio (written via `.partial` → rename)
+//!       cover.jpg             # cover image
+//!       metadata.json         # Audiobookshelf-format metadata (consumed by ABS)
+//!       podimo-state.json     # our internal state: UUID, status, progress
+//! ```
+//!
+//! Hydration: on startup the library walks `LIBRARY_DIR/**/podimo-state.json`
+//! and rebuilds the in-memory map. Any entries left in `Queued`/`Downloading`
+//! are forced to `Failed("interrupted by restart")` — we don't try to resume
+//! cross-process because the signed audio URL is short-lived and would be
+//! invalid by the time we got here.
+//!
+//! Migration: if any top-level directory matches the legacy UUID layout
+//! (`LIBRARY_DIR/<uuid>/meta.json`), the contents are moved into the new
+//! Author/Title layout on first startup.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -20,6 +33,11 @@ use tokio::fs;
 use tokio::sync::RwLock;
 
 pub mod download;
+
+/// Filename for our internal state record inside each book directory.
+const STATE_FILE: &str = "podimo-state.json";
+/// Filename Audiobookshelf reads for explicit metadata overrides.
+const ABS_METADATA_FILE: &str = "metadata.json";
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -61,11 +79,13 @@ impl std::fmt::Debug for Library {
 }
 
 impl Library {
-    /// Construct a Library rooted at `root`, hydrating any pre-existing
-    /// `<root>/<id>/meta.json` entries. Creates `<root>` if missing.
+    /// Construct a Library rooted at `root`. Migrates any legacy UUID-layout
+    /// entries, then hydrates the in-memory index from the on-disk tree.
+    /// Creates `<root>` if missing.
     pub async fn new(root: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root).await?;
+        migrate_legacy_layout(&root).await?;
         let entries = hydrate(&root).await?;
         Ok(Self {
             root,
@@ -77,20 +97,57 @@ impl Library {
         &self.root
     }
 
-    pub fn entry_dir(&self, id: &str) -> PathBuf {
-        self.root.join(id)
+    /// On-disk directory for `entry`, derived from sanitized author + title.
+    pub fn entry_dir(&self, entry: &LibraryEntry) -> PathBuf {
+        self.root
+            .join(sanitize_segment(&entry.author, "Unknown Author"))
+            .join(sanitize_segment(&entry.title, "Untitled"))
     }
 
-    pub fn audio_path(&self, id: &str) -> PathBuf {
-        self.entry_dir(id).join("audio.mp3")
+    /// `<entry_dir>/<sanitized title>.mp3` — Audiobookshelf doesn't care about
+    /// the exact name as long as there's exactly one recognized audio file in
+    /// the book dir, but a title-based filename makes the tree readable when
+    /// browsing the NAS by hand.
+    pub fn audio_path(&self, entry: &LibraryEntry) -> PathBuf {
+        let mut p = self.entry_dir(entry);
+        p.push(format!(
+            "{}.mp3",
+            sanitize_segment(&entry.title, "Untitled")
+        ));
+        p
     }
 
-    pub fn cover_path(&self, id: &str) -> PathBuf {
-        self.entry_dir(id).join("cover.jpg")
+    pub fn audio_partial_path(&self, entry: &LibraryEntry) -> PathBuf {
+        let mut p = self.audio_path(entry);
+        p.set_extension("mp3.partial");
+        p
     }
 
-    pub fn audio_partial_path(&self, id: &str) -> PathBuf {
-        self.entry_dir(id).join("audio.mp3.partial")
+    pub fn cover_path(&self, entry: &LibraryEntry) -> PathBuf {
+        self.entry_dir(entry).join("cover.jpg")
+    }
+
+    pub fn state_path(&self, entry: &LibraryEntry) -> PathBuf {
+        self.entry_dir(entry).join(STATE_FILE)
+    }
+
+    /// Convenience: look up `id` and compute its audio path. Returns `None` if
+    /// the entry doesn't exist.
+    pub async fn audio_path_for(&self, id: &str) -> Option<PathBuf> {
+        let entry = self.entries.read().await.get(id).cloned()?;
+        Some(self.audio_path(&entry))
+    }
+
+    /// Convenience: look up `id` and compute its cover path.
+    pub async fn cover_path_for(&self, id: &str) -> Option<PathBuf> {
+        let entry = self.entries.read().await.get(id).cloned()?;
+        Some(self.cover_path(&entry))
+    }
+
+    /// Convenience: look up `id` and compute its partial-download path.
+    pub async fn audio_partial_path_for(&self, id: &str) -> Option<PathBuf> {
+        let entry = self.entries.read().await.get(id).cloned()?;
+        Some(self.audio_partial_path(&entry))
     }
 
     /// Snapshot of all entries, newest-added first.
@@ -111,38 +168,49 @@ impl Library {
         self.entries.read().await.contains_key(id)
     }
 
-    /// Insert a fresh entry. Fails if `id` is already present — callers should
-    /// `remove` first or check `contains`.
+    /// Insert a fresh entry. Writes both `podimo-state.json` (our state) and
+    /// `metadata.json` (Audiobookshelf format) so ABS can pick the book up as
+    /// soon as the audio file lands. Fails if `id` is already present.
     pub async fn add(&self, entry: LibraryEntry) -> anyhow::Result<()> {
-        let dir = self.entry_dir(&entry.id);
+        let dir = self.entry_dir(&entry);
         fs::create_dir_all(&dir).await?;
         let mut guard = self.entries.write().await;
         if guard.contains_key(&entry.id) {
             anyhow::bail!("library already contains {}", entry.id);
         }
-        write_meta(&dir, &entry).await?;
+        write_state(&dir, &entry).await?;
+        write_abs_metadata(&dir, &entry).await?;
         guard.insert(entry.id.clone(), entry);
         Ok(())
     }
 
-    /// Drop the entry from memory and remove its on-disk directory.
+    /// Drop the entry from memory and remove its on-disk directory. Also
+    /// removes the (now-empty) author directory if no other entries share it,
+    /// keeping the tree tidy.
     pub async fn remove(&self, id: &str) -> anyhow::Result<bool> {
         let mut guard = self.entries.write().await;
-        if guard.remove(id).is_none() {
-            return Ok(false);
-        }
-        let dir = self.entry_dir(id);
+        let entry = match guard.remove(id) {
+            Some(e) => e,
+            None => return Ok(false),
+        };
+        let dir = self.entry_dir(&entry);
         if let Err(err) = fs::remove_dir_all(&dir).await {
             if err.kind() != io::ErrorKind::NotFound {
                 return Err(err.into());
+            }
+        }
+        if let Some(parent) = dir.parent() {
+            if parent != self.root {
+                let _ = fs::remove_dir(parent).await; // best-effort; fails if non-empty
             }
         }
         Ok(true)
     }
 
     /// Atomically read-modify-write an entry. The callback gets a `&mut` to the
-    /// in-memory copy; on return the changes are persisted to `meta.json` before
-    /// the lock is dropped. Returns `Ok(None)` if `id` doesn't exist.
+    /// in-memory copy; on return the changes are persisted to
+    /// `podimo-state.json` before the lock is dropped. Returns `Ok(None)` if
+    /// `id` doesn't exist.
     pub async fn update<F>(&self, id: &str, f: F) -> anyhow::Result<Option<LibraryEntry>>
     where
         F: FnOnce(&mut LibraryEntry),
@@ -154,64 +222,232 @@ impl Library {
         };
         f(entry);
         let snapshot = entry.clone();
-        let dir = self.entry_dir(id);
-        write_meta(&dir, &snapshot).await?;
+        let dir = self.entry_dir(&snapshot);
+        write_state(&dir, &snapshot).await?;
         Ok(Some(snapshot))
     }
 }
 
-/// Scan `<root>/<id>/meta.json` files into a fresh map. Force in-flight states
-/// (`Queued` / `Downloading`) to `Failed("interrupted")` since the cross-process
-/// audio URL would be expired by now.
+/// Filesystem-safe form of a path segment. Replaces FS-unsafe + control chars
+/// with whitespace, collapses runs of whitespace into a single space, trims
+/// leading/trailing whitespace + trailing dots (Windows can't handle either),
+/// and falls back to `fallback` when the result would otherwise be empty.
+fn sanitize_segment(raw: &str, fallback: &str) -> String {
+    let replaced: String = raw
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    // `split_whitespace` collapses any run of Unicode whitespace into a single
+    // ASCII space, which is exactly what we want.
+    let collapsed = replaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim_end_matches(|c: char| c == '.' || c.is_whitespace());
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else if trimmed.chars().count() > 200 {
+        // Keep filenames well under the 255-byte limit on common filesystems.
+        trimmed.chars().take(200).collect()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Audiobookshelf consumes a `metadata.json` next to the audio file as
+/// authoritative metadata. We write the subset Podimo gives us.
+#[derive(Debug, Serialize)]
+struct AbsMetadata<'a> {
+    title: &'a str,
+    authors: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    narrators: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "publishedYear")]
+    published_year: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    publisher: Option<&'a str>,
+}
+
+fn split_names(joined: &str) -> Vec<&str> {
+    joined
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+async fn write_abs_metadata(dir: &Path, entry: &LibraryEntry) -> anyhow::Result<()> {
+    let meta = AbsMetadata {
+        title: &entry.title,
+        authors: split_names(&entry.author),
+        narrators: split_names(&entry.narrators),
+        description: if entry.description.is_empty() {
+            None
+        } else {
+            Some(&entry.description)
+        },
+        published_year: entry.year.map(|y| y.to_string()),
+        publisher: entry.publisher.as_deref().filter(|s| !s.is_empty()),
+    };
+    let json = serde_json::to_vec_pretty(&meta)?;
+    let final_path = dir.join(ABS_METADATA_FILE);
+    let tmp_path = dir.join(format!("{ABS_METADATA_FILE}.tmp"));
+    fs::write(&tmp_path, json).await?;
+    fs::rename(&tmp_path, &final_path).await?;
+    Ok(())
+}
+
+/// Write `podimo-state.json` atomically (`tmp` → rename). Cheap because the
+/// state is small; the audio file uses the same pattern in `download.rs`.
+async fn write_state(dir: &Path, entry: &LibraryEntry) -> anyhow::Result<()> {
+    let json = serde_json::to_vec_pretty(entry)?;
+    let final_path = dir.join(STATE_FILE);
+    let tmp_path = dir.join(format!("{STATE_FILE}.tmp"));
+    fs::write(&tmp_path, json).await?;
+    fs::rename(&tmp_path, &final_path).await?;
+    Ok(())
+}
+
+/// Walk `<root>/**/podimo-state.json` two levels deep (Author/Title). Force
+/// in-flight states (`Queued` / `Downloading`) to `Failed("interrupted")`.
 async fn hydrate(root: &Path) -> anyhow::Result<BTreeMap<String, LibraryEntry>> {
     let mut map = BTreeMap::new();
-    let mut read = match fs::read_dir(root).await {
+    let mut top = match fs::read_dir(root).await {
         Ok(r) => r,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(map),
         Err(err) => return Err(err.into()),
     };
-    while let Some(entry) = read.next_entry().await? {
-        let path = entry.path();
-        if !path.is_dir() {
+    while let Some(author_dir) = top.next_entry().await? {
+        let author_path = author_dir.path();
+        if !author_path.is_dir() {
             continue;
         }
-        let meta_path = path.join("meta.json");
-        let raw = match fs::read(&meta_path).await {
-            Ok(b) => b,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+        let mut second = match fs::read_dir(&author_path).await {
+            Ok(r) => r,
             Err(err) => {
-                tracing::warn!(target: "podimo::library", "skip {}: {err}", meta_path.display());
+                tracing::warn!(target: "podimo::library", "skip {}: {err}", author_path.display());
                 continue;
             }
         };
-        let mut book: LibraryEntry = match serde_json::from_slice(&raw) {
-            Ok(b) => b,
-            Err(err) => {
-                tracing::warn!(target: "podimo::library", "corrupt {}: {err}", meta_path.display());
+        while let Some(title_dir) = second.next_entry().await? {
+            let title_path = title_dir.path();
+            if !title_path.is_dir() {
                 continue;
             }
-        };
-        if matches!(book.status, Status::Queued | Status::Downloading) {
-            book.status = Status::Failed;
-            book.error = Some("interrupted by restart".into());
-            // Rewrite the meta with the failed state so subsequent reads see it.
-            if let Err(err) = write_meta(&path, &book).await {
-                tracing::warn!(target: "podimo::library", "rewrite {}: {err}", meta_path.display());
+            let state_path = title_path.join(STATE_FILE);
+            let raw = match fs::read(&state_path).await {
+                Ok(b) => b,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    tracing::warn!(target: "podimo::library", "skip {}: {err}", state_path.display());
+                    continue;
+                }
+            };
+            let mut book: LibraryEntry = match serde_json::from_slice(&raw) {
+                Ok(b) => b,
+                Err(err) => {
+                    tracing::warn!(target: "podimo::library", "corrupt {}: {err}", state_path.display());
+                    continue;
+                }
+            };
+            if matches!(book.status, Status::Queued | Status::Downloading) {
+                book.status = Status::Failed;
+                book.error = Some("interrupted by restart".into());
+                if let Err(err) = write_state(&title_path, &book).await {
+                    tracing::warn!(target: "podimo::library", "rewrite {}: {err}", state_path.display());
+                }
             }
+            map.insert(book.id.clone(), book);
         }
-        map.insert(book.id.clone(), book);
     }
     Ok(map)
 }
 
-/// Write `meta.json` atomically (`tmp` → rename). Cheap because the meta is
-/// small; the heavy audio file uses the same pattern in `download.rs`.
-async fn write_meta(dir: &Path, entry: &LibraryEntry) -> anyhow::Result<()> {
-    let json = serde_json::to_vec_pretty(entry)?;
-    let final_path = dir.join("meta.json");
-    let tmp_path = dir.join("meta.json.tmp");
-    fs::write(&tmp_path, json).await?;
-    fs::rename(&tmp_path, &final_path).await?;
+/// Migrate any legacy `LIBRARY_DIR/<uuid>/meta.json` entries from the
+/// UUID-keyed layout to the new Author/Title layout. Best-effort: failures on
+/// individual books are logged and left in place. Runs every startup; on a
+/// clean install it scans the top-level dir and does nothing.
+async fn migrate_legacy_layout(root: &Path) -> anyhow::Result<()> {
+    let mut top = match fs::read_dir(root).await {
+        Ok(r) => r,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+
+    static UUID_DIR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(
+            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        )
+        .expect("static regex compiles")
+    });
+
+    while let Some(dir_entry) = top.next_entry().await? {
+        let path = dir_entry.path();
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !UUID_DIR_RE.is_match(name) {
+            continue;
+        }
+        if !path.is_dir() {
+            continue;
+        }
+        let legacy_meta = path.join("meta.json");
+        let raw = match fs::read(&legacy_meta).await {
+            Ok(b) => b,
+            Err(_) => continue, // not a podimo dir, leave alone
+        };
+        let entry: LibraryEntry = match serde_json::from_slice(&raw) {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::warn!(target: "podimo::library", "legacy meta unreadable, skipping migration of {}: {err}", path.display());
+                continue;
+            }
+        };
+        let new_dir = root
+            .join(sanitize_segment(&entry.author, "Unknown Author"))
+            .join(sanitize_segment(&entry.title, "Untitled"));
+        if new_dir.exists() {
+            tracing::warn!(target: "podimo::library", "migration target {} already exists; leaving legacy {} in place", new_dir.display(), path.display());
+            continue;
+        }
+        if let Some(parent) = new_dir.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        // Move the whole legacy dir to the new location.
+        if let Err(err) = fs::rename(&path, &new_dir).await {
+            tracing::warn!(target: "podimo::library", "rename {} → {} failed: {err}", path.display(), new_dir.display());
+            continue;
+        }
+        // Rename audio.mp3 → <sanitized_title>.mp3 inside the moved dir.
+        let old_audio = new_dir.join("audio.mp3");
+        let new_audio = new_dir.join(format!(
+            "{}.mp3",
+            sanitize_segment(&entry.title, "Untitled")
+        ));
+        if old_audio.exists() && old_audio != new_audio {
+            if let Err(err) = fs::rename(&old_audio, &new_audio).await {
+                tracing::warn!(target: "podimo::library", "rename {} → {} failed: {err}", old_audio.display(), new_audio.display());
+            }
+        }
+        // Rename meta.json → podimo-state.json.
+        let old_state = new_dir.join("meta.json");
+        let new_state = new_dir.join(STATE_FILE);
+        if old_state.exists() && !new_state.exists() {
+            if let Err(err) = fs::rename(&old_state, &new_state).await {
+                tracing::warn!(target: "podimo::library", "rename {} → {} failed: {err}", old_state.display(), new_state.display());
+            }
+        }
+        // Drop an ABS-format metadata.json next to it.
+        if let Err(err) = write_abs_metadata(&new_dir, &entry).await {
+            tracing::warn!(target: "podimo::library", "write abs metadata in {} failed: {err}", new_dir.display());
+        }
+        tracing::info!(target: "podimo::library", "migrated legacy entry {} → {}", path.display(), new_dir.display());
+    }
     Ok(())
 }
 
@@ -222,9 +458,9 @@ mod tests {
     fn sample_entry(id: &str) -> LibraryEntry {
         LibraryEntry {
             id: id.into(),
-            title: "Test".into(),
-            author: "Author".into(),
-            narrators: "Narrator".into(),
+            title: "The Reapers Are the Angels".into(),
+            author: "Alden Bell".into(),
+            narrators: "A Narrator".into(),
             description: "Desc".into(),
             duration_seconds: 3600,
             publisher: Some("Pub".into()),
@@ -238,13 +474,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_then_list_returns_inserted_entry() {
+    async fn add_creates_author_title_layout() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = Library::new(tmp.path()).await.unwrap();
-        lib.add(sample_entry("a1")).await.unwrap();
-        let v = lib.list().await;
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].id, "a1");
+        let e = sample_entry("a1");
+        lib.add(e.clone()).await.unwrap();
+        let expected_dir = tmp
+            .path()
+            .join("Alden Bell")
+            .join("The Reapers Are the Angels");
+        assert!(
+            expected_dir.exists(),
+            "expected {} to exist",
+            expected_dir.display()
+        );
+        assert!(
+            expected_dir.join(STATE_FILE).exists(),
+            "podimo-state.json missing"
+        );
+        assert!(
+            expected_dir.join(ABS_METADATA_FILE).exists(),
+            "metadata.json (ABS) missing"
+        );
+        // Audio path is the sanitized title + .mp3.
+        let audio = lib.audio_path(&e);
+        assert_eq!(audio.file_name().unwrap(), "The Reapers Are the Angels.mp3");
+        assert_eq!(audio.parent().unwrap(), expected_dir);
+    }
+
+    #[tokio::test]
+    async fn abs_metadata_has_split_authors_and_narrators() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::new(tmp.path()).await.unwrap();
+        let mut e = sample_entry("a1");
+        e.author = "First Author, Second Author".into();
+        e.narrators = "Narrator A, Narrator B".into();
+        lib.add(e.clone()).await.unwrap();
+        let meta_raw =
+            std::fs::read(lib.entry_dir(&e).join(ABS_METADATA_FILE)).expect("metadata.json exists");
+        let v: serde_json::Value = serde_json::from_slice(&meta_raw).unwrap();
+        assert_eq!(v["title"], "The Reapers Are the Angels");
+        let authors: Vec<&str> = v["authors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        assert_eq!(authors, vec!["First Author", "Second Author"]);
+        let narrators: Vec<&str> = v["narrators"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        assert_eq!(narrators, vec!["Narrator A", "Narrator B"]);
+        assert_eq!(v["publishedYear"], "2024");
+    }
+
+    #[tokio::test]
+    async fn sanitize_strips_unsafe_chars() {
+        assert_eq!(sanitize_segment("A / B", "x"), "A B");
+        assert_eq!(sanitize_segment("With: colon", "x"), "With colon");
+        assert_eq!(
+            sanitize_segment(" leading and trailing ", "x"),
+            "leading and trailing"
+        );
+        assert_eq!(sanitize_segment("trailing.", "x"), "trailing");
+        assert_eq!(sanitize_segment("", "fallback"), "fallback");
+        assert_eq!(sanitize_segment("   ", "fallback"), "fallback");
+        // Long titles are truncated.
+        let long = "x".repeat(500);
+        let s = sanitize_segment(&long, "x");
+        assert!(s.len() <= 200);
     }
 
     #[tokio::test]
@@ -260,11 +561,14 @@ mod tests {
     async fn remove_drops_entry_and_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = Library::new(tmp.path()).await.unwrap();
-        lib.add(sample_entry("a1")).await.unwrap();
-        let dir = lib.entry_dir("a1");
+        let e = sample_entry("a1");
+        lib.add(e.clone()).await.unwrap();
+        let dir = lib.entry_dir(&e);
         assert!(dir.exists());
         assert!(lib.remove("a1").await.unwrap());
         assert!(!dir.exists());
+        // Author dir should also be tidied up.
+        assert!(!dir.parent().unwrap().exists());
         assert!(lib.get("a1").await.is_none());
     }
 
@@ -306,5 +610,41 @@ mod tests {
         let e = lib2.get("a1").await.unwrap();
         assert_eq!(e.status, Status::Failed);
         assert_eq!(e.error.as_deref(), Some("interrupted by restart"));
+    }
+
+    #[tokio::test]
+    async fn migrates_legacy_uuid_layout_on_startup() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Plant a legacy entry: LIBRARY_DIR/<uuid>/meta.json + audio.mp3.
+        let uuid = "fefa939e-c84d-4c16-8bbf-9575e1379d81";
+        let legacy_dir = tmp.path().join(uuid);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let mut e = sample_entry(uuid);
+        e.status = Status::Done;
+        e.audio_size_bytes = Some(123);
+        e.audio_downloaded_bytes = 123;
+        let meta_json = serde_json::to_vec_pretty(&e).unwrap();
+        std::fs::write(legacy_dir.join("meta.json"), meta_json).unwrap();
+        std::fs::write(legacy_dir.join("audio.mp3"), b"FAKE").unwrap();
+
+        // Boot a Library at this root: migration should move things.
+        let lib = Library::new(tmp.path()).await.unwrap();
+        let new_dir = tmp
+            .path()
+            .join("Alden Bell")
+            .join("The Reapers Are the Angels");
+        assert!(new_dir.exists(), "new dir not created");
+        assert!(!legacy_dir.exists(), "legacy dir should be gone");
+        assert!(new_dir.join(STATE_FILE).exists());
+        assert!(new_dir.join(ABS_METADATA_FILE).exists());
+        assert!(
+            new_dir.join("The Reapers Are the Angels.mp3").exists(),
+            "audio not renamed"
+        );
+
+        // Hydrated entry still has its UUID + Done status.
+        let entry = lib.get(uuid).await.unwrap();
+        assert_eq!(entry.status, Status::Done);
+        assert_eq!(entry.audio_size_bytes, Some(123));
     }
 }

@@ -94,7 +94,11 @@ async fn perform(
 
     // Cover is best-effort — a failed cover should not kill the audio download.
     if let Some(url) = cover_url {
-        if let Err(err) = download_cover(scraper, url, &library.cover_path(audiobook_id)).await {
+        let cover_dest = library
+            .cover_path_for(audiobook_id)
+            .await
+            .ok_or_else(|| "entry vanished mid-download".to_string())?;
+        if let Err(err) = download_cover(scraper, url, &cover_dest).await {
             tracing::warn!(target: "podimo::library", "cover download failed for {audiobook_id}: {err}");
         }
     }
@@ -112,8 +116,14 @@ async fn download_audio(
     library: &Library,
     audiobook_id: &str,
 ) -> anyhow::Result<u64> {
-    let partial = library.audio_partial_path(audiobook_id);
-    let final_path = library.audio_path(audiobook_id);
+    // Take a snapshot of the entry to resolve the on-disk paths — author/title
+    // are stable for an entry's lifetime, so it's fine to compute paths once.
+    let entry = library
+        .get(audiobook_id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("entry vanished mid-download"))?;
+    let partial = library.audio_partial_path(&entry);
+    let final_path = library.audio_path(&entry);
 
     // The signed URL can be many GB; we stream chunks instead of buffering.
     // No outer timeout — the connection itself has reqwest's default. A

@@ -351,7 +351,7 @@ async fn serve_audio(State(state): State<AppState>, Path(id): Path<String>) -> R
         )
             .into_response();
     }
-    let path = library.audio_path(&id);
+    let path = library.audio_path(&entry);
     let filename = filename_for(&entry.title, "mp3");
     serve_file(&path, "audio/mpeg", Some(&filename)).await
 }
@@ -364,7 +364,11 @@ async fn serve_cover(State(state): State<AppState>, Path(id): Path<String>) -> R
     if !PODCAST_ID_RE.is_match(&id) {
         return AppError::BadRequest("Invalid id".into()).into_response();
     }
-    let path = library.cover_path(&id);
+    let entry = match library.get(&id).await {
+        Some(e) => e,
+        None => return AppError::NotFound.into_response(),
+    };
+    let path = library.cover_path(&entry);
     if !path.exists() {
         return AppError::NotFound.into_response();
     }

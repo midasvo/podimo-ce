@@ -216,10 +216,11 @@ async fn audio_serves_done_file_with_attachment_header() {
 
     let library = state.library.as_ref().unwrap();
     let id = "dddd4444-5555-6666-7777-888899990000";
-    library.add(sample(id, Status::Done)).await.unwrap();
+    let entry = sample(id, Status::Done);
+    library.add(entry.clone()).await.unwrap();
 
     // Manually write the audio file the handler will serve.
-    std::fs::write(library.audio_path(id), b"FAKE-MP3-BYTES").unwrap();
+    std::fs::write(library.audio_path(&entry), b"FAKE-MP3-BYTES").unwrap();
 
     let resp = http_client()
         .get(format!("http://{addr}/library/{id}/audio.mp3"))
