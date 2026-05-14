@@ -110,6 +110,18 @@ async fn perform(
     Ok(audio_size)
 }
 
+/// Per-request override for the audio download. The shared `scraper` Client
+/// has a 30 s total-request timeout (good for GraphQL + HEAD), but the same
+/// limit applied to a multi-GB audio body cuts the stream off mid-flight and
+/// surfaces as `error decoding response body`. Four hours is plenty for any
+/// audiobook on any reasonable connection without being indefinite.
+const AUDIO_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(4 * 3600);
+
+/// Same idea but smaller — cover images are typically <500 KB, but a 30 s
+/// limit shared with the rest of the client is still too tight if the CDN
+/// is slow on the day. One minute is comfortably generous.
+const COVER_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+
 async fn download_audio(
     scraper: &reqwest::Client,
     url: &str,
@@ -125,10 +137,16 @@ async fn download_audio(
     let partial = library.audio_partial_path(&entry);
     let final_path = library.audio_path(&entry);
 
-    // The signed URL can be many GB; we stream chunks instead of buffering.
-    // No outer timeout — the connection itself has reqwest's default. A
-    // mid-stream stall is reported via the `bytes_stream` error.
-    let response = scraper.get(url).send().await?.error_for_status()?;
+    // Per-request timeout overrides the client default. Without this the
+    // streamed body would inherit the scraper Client's 30 s total-request
+    // timeout and any audiobook over ~50 MB on a typical line would fail
+    // mid-stream with `error decoding response body`.
+    let response = scraper
+        .get(url)
+        .timeout(AUDIO_DOWNLOAD_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?;
     let content_length = response.content_length();
 
     if let Some(total) = content_length {
@@ -171,6 +189,7 @@ async fn download_cover(
 ) -> anyhow::Result<()> {
     let bytes = scraper
         .get(url)
+        .timeout(COVER_DOWNLOAD_TIMEOUT)
         .send()
         .await?
         .error_for_status()?
