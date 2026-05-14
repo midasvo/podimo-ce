@@ -323,6 +323,104 @@ async fn add_with_podcast_url_shows_error() {
 }
 
 #[tokio::test]
+async fn forget_leaves_audio_and_metadata_on_disk() {
+    // End-to-end safety: the HTTP /library/<id>/remove endpoint must never
+    // delete the audio file, cover, or ABS metadata. Only the podimo-rs
+    // state marker should go.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir_str = tmp.path().to_string_lossy().to_string();
+    std::mem::forget(tmp);
+    let (addr, handle, state) = boot_with_library_dir(dir_str.clone()).await;
+
+    let library = state.library.as_ref().unwrap();
+    let id = "aabbccdd-1111-2222-3333-444455556666";
+    let entry = sample(id, Status::Done);
+    library.add(entry.clone()).await.unwrap();
+    let book_dir = library.entry_dir(&entry);
+    // Plant audio + cover (download would do this in real flow).
+    std::fs::write(library.audio_path(&entry), b"AUDIO").unwrap();
+    std::fs::write(library.cover_path(&entry), b"COVER").unwrap();
+
+    let resp = http_client()
+        .post(format!("http://{addr}/library/{id}/remove"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    assert!(
+        !library.contains(id).await,
+        "entry should be forgotten from memory"
+    );
+    assert!(
+        !library.state_path(&entry).exists(),
+        "state file should be deleted"
+    );
+    // Everything else stays. This is the entire point of "Forget".
+    assert!(book_dir.exists(), "book dir must remain");
+    assert!(library.audio_path(&entry).exists(), "audio must remain");
+    assert!(library.cover_path(&entry).exists(), "cover must remain");
+    assert!(
+        book_dir.join("metadata.json").exists(),
+        "ABS metadata must remain"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn add_refuses_pre_existing_dir() {
+    // End-to-end safety: hitting `/library/add` when the target Author/Title/
+    // dir already exists (e.g. user has an existing ABS book at the same
+    // path) must surface an error and write nothing.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir_str = tmp.path().to_string_lossy().to_string();
+    std::mem::forget(tmp);
+    let (addr, handle, state) = boot_with_library_dir(dir_str.clone()).await;
+
+    // Pre-create an "existing book" at the target path. `sample()`'s entry
+    // would land at `Book aaaa1111-.../`-style title path, but the
+    // `/library/add` flow uses the metadata Podimo returns. Since this test
+    // can't hit the real Podimo, it instead seeds the library directly and
+    // then attempts to re-add via the in-memory API.
+    let library = state.library.as_ref().unwrap();
+    let id = "abcd1234-5678-90ab-cdef-1234567890ab";
+    let mut entry = sample(id, Status::Queued);
+    entry.title = "Some Real Book".into();
+    entry.author = "Some Real Author".into();
+    // Plant a foreign book at the path podimo-rs would want to use.
+    let foreign_dir = std::path::Path::new(&dir_str)
+        .join("Some Real Author")
+        .join("Some Real Book");
+    std::fs::create_dir_all(&foreign_dir).unwrap();
+    std::fs::write(foreign_dir.join("Their Book.mp3"), b"NOT MINE").unwrap();
+
+    // Direct add via in-memory API to verify the safety check.
+    let err = library.add(entry).await.unwrap_err();
+    assert!(
+        err.to_string().contains("not managed by podimo-rs"),
+        "expected foreign-content refusal: {err}"
+    );
+    // Foreign content should be untouched.
+    assert!(foreign_dir.join("Their Book.mp3").exists());
+    assert!(!foreign_dir.join("podimo-state.json").exists());
+    assert!(!foreign_dir.join("metadata.json").exists());
+
+    // sanity: /library should still render an empty list because the add
+    // failed.
+    let resp = http_client()
+        .get(format!("http://{addr}/library"))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("Nothing here yet"),
+        "library should be empty: {body}"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn add_with_garbage_input_shows_error() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_string_lossy().to_string();

@@ -144,6 +144,14 @@
   the container, and probe alternative paths before you commit to a mount.
 </p>
 
+<p class="hint-block" style="margin: -0.4rem 0 1.5rem; background: color-mix(in srgb, #2c8a4a 8%, var(--paper-2)); border-left: 3px solid #2c8a4a; padding: 0.7rem 0.95rem; border-radius: 2px;">
+  <strong>Safe to point at an existing Audiobookshelf library.</strong>
+  podimo-rs refuses to add a book if the target <em>Author/Title/</em>
+  directory already exists, and the Forget button never deletes audio,
+  cover, or ABS metadata files — only podimo-rs's own state marker. It
+  cannot delete books it didn't add.
+</p>
+
 <div class="nav-row">
   <span></span>
   <a href="/">&larr; Home</a>

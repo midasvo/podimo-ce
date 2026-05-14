@@ -190,6 +190,21 @@
   even if you cancel your Podimo subscription.
 </p>
 
+<details class="help" style="margin: 0 0 1.25rem;">
+  <summary>
+    <span class="glyph" aria-hidden="true">+</span>
+    <span>Sharing this directory with an existing Audiobookshelf library?</span>
+  </summary>
+  <div class="help-body">
+    <p class="lede">podimo-rs is conservative about the files it touches:</p>
+    <ul style="font-family: 'Iowan Old Style', Charter, Georgia, serif; color: var(--ink-soft); margin: 0.4rem 0 0.6rem 1.2rem; padding: 0; line-height: 1.55;">
+      <li>It refuses to add a book if the target <em>Author/Title/</em> directory already exists. You'll see a clear error pointing at the path — move or rename your existing book first if you want podimo-rs to manage it.</li>
+      <li>The <strong>Forget</strong> button below only removes podimo-rs's own state marker (<code>podimo-state.json</code>). Audio file, cover, and Audiobookshelf metadata stay on disk; the book stays visible to ABS.</li>
+      <li>podimo-rs never deletes books it didn't add. To wipe an audio file, do it from the filesystem yourself.</li>
+    </ul>
+  </div>
+</details>
+
 {% if error %}
 <div class="error" role="alert">
   <span class="tag">Error</span>
@@ -258,8 +273,12 @@
         {% if book.has_audio %}
         <a class="primary" href="/library/{{ book.id }}/audio.mp3" download>Download .mp3</a>
         {% endif %}
-        <form action="/library/{{ book.id }}/remove" method="post" onsubmit="return confirm('Remove this book and delete the files?');">
-          <button type="submit" class="danger">Remove</button>
+        <form
+          action="/library/{{ book.id }}/remove"
+          method="post"
+          onsubmit="return confirm('Forget this book? Files (audio, cover, metadata.json) stay on disk so Audiobookshelf keeps seeing them — only podimo-rs stops tracking it.');"
+        >
+          <button type="submit" class="danger">Forget</button>
         </form>
       </div>
     </div>

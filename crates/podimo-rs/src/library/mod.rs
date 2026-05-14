@@ -170,11 +170,46 @@ impl Library {
 
     /// Insert a fresh entry. Writes both `podimo-state.json` (our state) and
     /// `metadata.json` (Audiobookshelf format) so ABS can pick the book up as
-    /// soon as the audio file lands. Fails if `id` is already present.
+    /// soon as the audio file lands.
+    ///
+    /// **Refuses to overwrite anything.** Fails if:
+    ///   - `id` is already in the in-memory index, or
+    ///   - the target `<author>/<title>/` directory already exists on disk.
+    ///
+    /// The second check is the safety net for libraries shared with an
+    /// existing Audiobookshelf collection: if the user already has a book at
+    /// the same author/title path, we refuse rather than write our files
+    /// into their directory. The user must move or rename their existing
+    /// book first.
     pub async fn add(&self, entry: LibraryEntry) -> anyhow::Result<()> {
         let dir = self.entry_dir(&entry);
+        {
+            let guard = self.entries.read().await;
+            if guard.contains_key(&entry.id) {
+                anyhow::bail!("library already contains {}", entry.id);
+            }
+        }
+        if fs::try_exists(&dir).await.unwrap_or(false) {
+            // Distinguish "already a podimo entry on disk" from "foreign
+            // content not managed by podimo-rs" so the user knows whether to
+            // delete it themselves or whether something needs investigation.
+            let has_state = fs::try_exists(dir.join(STATE_FILE)).await.unwrap_or(false);
+            if has_state {
+                anyhow::bail!(
+                    "target directory `{}` already contains a podimo-rs entry — remove it first",
+                    dir.display(),
+                );
+            } else {
+                anyhow::bail!(
+                    "target directory `{}` already exists and is not managed by podimo-rs — \
+                    move or rename it first; podimo-rs refuses to overlay foreign content",
+                    dir.display(),
+                );
+            }
+        }
         fs::create_dir_all(&dir).await?;
         let mut guard = self.entries.write().await;
+        // Re-check after taking the write lock in case of a concurrent add.
         if guard.contains_key(&entry.id) {
             anyhow::bail!("library already contains {}", entry.id);
         }
@@ -184,24 +219,30 @@ impl Library {
         Ok(())
     }
 
-    /// Drop the entry from memory and remove its on-disk directory. Also
-    /// removes the (now-empty) author directory if no other entries share it,
-    /// keeping the tree tidy.
+    /// "Forget" an entry — drop it from the in-memory index and delete the
+    /// `podimo-state.json` marker on disk, but **leave every other file in
+    /// place** (`metadata.json`, the audio file, the cover image, the
+    /// directory itself, the author directory). The book stays visible to
+    /// Audiobookshelf scanning the same volume; only podimo-rs stops
+    /// tracking it.
+    ///
+    /// This is the safe semantics for a library shared with an existing ABS
+    /// collection: removing a book from the podimo-rs UI never deletes the
+    /// audio file. If the user wants to wipe the file too they do it with
+    /// `rm -rf` (or the NAS UI) themselves.
+    ///
+    /// Returns `Ok(true)` if the entry was forgotten, `Ok(false)` if no
+    /// entry with that id existed.
     pub async fn remove(&self, id: &str) -> anyhow::Result<bool> {
         let mut guard = self.entries.write().await;
         let entry = match guard.remove(id) {
             Some(e) => e,
             None => return Ok(false),
         };
-        let dir = self.entry_dir(&entry);
-        if let Err(err) = fs::remove_dir_all(&dir).await {
+        let state_file = self.state_path(&entry);
+        if let Err(err) = fs::remove_file(&state_file).await {
             if err.kind() != io::ErrorKind::NotFound {
-                return Err(err.into());
-            }
-        }
-        if let Some(parent) = dir.parent() {
-            if parent != self.root {
-                let _ = fs::remove_dir(parent).await; // best-effort; fails if non-empty
+                tracing::warn!(target: "podimo::library", "delete {}: {err}", state_file.display());
             }
         }
         Ok(true)
@@ -558,18 +599,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_drops_entry_and_dir() {
+    async fn forget_only_removes_state_file_leaves_audio_intact() {
+        // "remove" semantics post-safety-layer: the on-disk audio + cover +
+        // ABS metadata stay; only `podimo-state.json` (our marker) goes.
         let tmp = tempfile::tempdir().unwrap();
         let lib = Library::new(tmp.path()).await.unwrap();
         let e = sample_entry("a1");
         lib.add(e.clone()).await.unwrap();
         let dir = lib.entry_dir(&e);
-        assert!(dir.exists());
+        // Plant a fake audio + cover next to the metadata to simulate a
+        // completed download.
+        let audio = lib.audio_path(&e);
+        let cover = lib.cover_path(&e);
+        std::fs::write(&audio, b"FAKE-AUDIO").unwrap();
+        std::fs::write(&cover, b"FAKE-COVER").unwrap();
+
         assert!(lib.remove("a1").await.unwrap());
-        assert!(!dir.exists());
-        // Author dir should also be tidied up.
-        assert!(!dir.parent().unwrap().exists());
-        assert!(lib.get("a1").await.is_none());
+
+        assert!(
+            lib.get("a1").await.is_none(),
+            "in-memory entry should be gone"
+        );
+        assert!(!lib.state_path(&e).exists(), "state file should be deleted");
+        // Everything else stays.
+        assert!(dir.exists(), "directory should remain");
+        assert!(audio.exists(), "audio file should remain");
+        assert!(cover.exists(), "cover should remain");
+        assert!(
+            dir.join(ABS_METADATA_FILE).exists(),
+            "ABS metadata should remain"
+        );
+        assert!(dir.parent().unwrap().exists(), "author dir should remain");
     }
 
     #[tokio::test]
@@ -577,6 +637,77 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let lib = Library::new(tmp.path()).await.unwrap();
         assert!(!lib.remove("nope").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn add_refuses_existing_dir_with_foreign_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::new(tmp.path()).await.unwrap();
+        let e = sample_entry("a1");
+        // Plant a pre-existing book at the would-be target path with random
+        // content (simulating a user's existing Audiobookshelf book).
+        let foreign_dir = tmp
+            .path()
+            .join("Alden Bell")
+            .join("The Reapers Are the Angels");
+        std::fs::create_dir_all(&foreign_dir).unwrap();
+        std::fs::write(foreign_dir.join("Some Other Book.mp3"), b"NOT MINE").unwrap();
+
+        let err = lib.add(e.clone()).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not managed by podimo-rs"),
+            "expected foreign-content error: {msg}"
+        );
+        // The foreign content should be untouched.
+        assert!(foreign_dir.join("Some Other Book.mp3").exists());
+        assert!(
+            !foreign_dir.join(STATE_FILE).exists(),
+            "state file must not have been written"
+        );
+        assert!(
+            !foreign_dir.join(ABS_METADATA_FILE).exists(),
+            "ABS metadata must not have been written"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_refuses_existing_dir_with_prior_podimo_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::new(tmp.path()).await.unwrap();
+        let e = sample_entry("a1");
+        lib.add(e.clone()).await.unwrap();
+        // Forget the entry (state file gone, dir stays).
+        lib.remove("a1").await.unwrap();
+        // Re-adding must refuse with the "prior podimo entry"-flavoured
+        // error since the state file isn't there, OR the foreign-content
+        // flavour since there's no state file either way. After remove the
+        // state file is gone, so this lands on the foreign-content branch.
+        let err = lib.add(e.clone()).await.unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn add_refuses_when_a_podimo_state_file_lingers() {
+        // Edge case: the state file lingers in a dir we somehow don't know
+        // about. Add should refuse with the "already a podimo entry"
+        // message.
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::new(tmp.path()).await.unwrap();
+        let e = sample_entry("a1");
+        let dir = tmp
+            .path()
+            .join("Alden Bell")
+            .join("The Reapers Are the Angels");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(STATE_FILE), b"{}").unwrap();
+        let err = lib.add(e).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("already contains a podimo-rs entry"),
+            "expected already-managed message: {}",
+            err
+        );
     }
 
     #[tokio::test]
