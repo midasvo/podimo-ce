@@ -37,6 +37,12 @@ pub struct Config {
     /// always see a fresh link.
     pub audiobook_audio_cache_time: u64,
 
+    /// Enables the audiobook library (`/library/*` endpoints). Requires
+    /// `LOCAL_CREDENTIALS=true` because library entries are single-user.
+    pub enable_library: bool,
+    /// Where downloaded audiobooks are stored when the library is enabled.
+    pub library_dir: String,
+
     pub public_feeds: bool,
 
     /// Podimo GraphQL endpoint. Overridable via `PODIMO_GRAPHQL_URL` so
@@ -75,6 +81,9 @@ impl Config {
             head_cache_time: env_u64("HEAD_CACHE_TIME", 7 * 60 * 60 * 24),
             audiobook_audio_cache_time: env_u64("AUDIOBOOK_AUDIO_CACHE_TIME", 600),
 
+            enable_library: env_bool("ENABLE_LIBRARY", false),
+            library_dir: env_or("LIBRARY_DIR", "./library"),
+
             public_feeds: env_bool("PUBLIC_FEEDS", false),
 
             graphql_url: env_or("PODIMO_GRAPHQL_URL", "https://podimo.com/graphql"),
@@ -104,6 +113,10 @@ impl Config {
         tracing::info!(target: "podimo", "PODCAST_CACHE_TIME: {} sec", self.podcast_cache_time);
         tracing::info!(target: "podimo", "HEAD_CACHE_TIME: {} sec", self.head_cache_time);
         tracing::info!(target: "podimo", "AUDIOBOOK_AUDIO_CACHE_TIME: {} sec", self.audiobook_audio_cache_time);
+        tracing::info!(target: "podimo", "ENABLE_LIBRARY: {}", self.enable_library);
+        if self.enable_library {
+            tracing::info!(target: "podimo", "LIBRARY_DIR: {}", self.library_dir);
+        }
     }
 }
 

@@ -13,6 +13,9 @@ Endpoints:
   the latest N episodes.
 - `GET /audiobook/<audiobook_id>.xml` — single-item RSS feed for one Podimo
   audiobook (the book itself is the lone episode).
+- `GET /library` + `/library/*` — opt-in audiobook library (downloads books
+  to disk for permanent local storage). Requires `ENABLE_LIBRARY=true` +
+  `LOCAL_CREDENTIALS=true`.
 
 History: this was a Python service (Quart on Hypercorn), itself a fork of
 `ThijsRay/podimo`. The Rust rewrite landed in PR #2 and replaced Python at the
@@ -54,11 +57,16 @@ Docker build matches CI: `docker build -t podimo-rs:test .` then
 │       │   ├── error.rs             # AppError + IntoResponse
 │       │   ├── state.rs             # AppState (config, caches, blocklist, scraper, templates)
 │       │   ├── handlers/
+│       │   │   ├── auth.rs          # shared authorize_request gate
 │       │   │   ├── healthz.rs       # GET /healthz
 │       │   │   ├── index.rs         # GET/POST /
 │       │   │   ├── feed.rs          # GET /feed/<id>.xml
 │       │   │   ├── audiobook.rs     # GET /audiobook/<id>.xml
+│       │   │   ├── library.rs       # GET /library + /library/* (opt-in)
 │       │   │   └── not_found.rs     # fallback
+│       │   ├── library/
+│       │   │   ├── mod.rs           # Library struct + on-disk hydration
+│       │   │   └── download.rs      # background download task
 │       │   ├── middleware.rs        # after-request CORS + Cache-Control
 │       │   ├── podimo/
 │       │   │   ├── client.rs        # GraphQL login + getPodcasts + audiobook queries
@@ -106,6 +114,35 @@ Feed request flow:
 5. `podimo::rss::podcasts_to_rss` builds RSS via the `rss` crate's iTunes
    extensions and runs `url_head_info` HEAD probes for enclosure metadata in
    chunks of 10 concurrent requests.
+
+### Library flow (opt-in)
+
+When `ENABLE_LIBRARY=true` *and* `LOCAL_CREDENTIALS=true`, the service exposes
+a persistent audiobook library at `/library`:
+
+- `GET  /library` — HTML overview with cover thumbnails, status badges,
+  per-book progress bars during download.
+- `POST /library/add` — accepts a Podimo audiobook URL or bare UUID. Fetches
+  metadata synchronously (so the new row appears immediately), then spawns a
+  background task that re-mints the signed audio URL, streams `audio.mp3` to
+  disk via `.partial` → rename, and downloads `cover.jpg`. Errors are
+  surfaced on the entry (status=failed + error message).
+- `POST /library/<id>/remove` — drops the entry and its on-disk directory.
+- `GET  /library/<id>/audio.mp3` — streams the local file with
+  `Content-Disposition: attachment; filename="<title>.mp3"`.
+- `GET  /library/<id>/cover.jpg` — local cover image.
+
+Storage layout: `LIBRARY_DIR/<audiobook_uuid>/` containing `meta.json` (book
+metadata + status), `audio.mp3`, `cover.jpg`. Hydration on startup scans this
+tree; entries that crashed mid-download (status=queued/downloading) are
+forced to `Failed("interrupted by restart")` since the signed URL would be
+expired by the time we got here.
+
+The library requires `LOCAL_CREDENTIALS=true` because library entries are
+inherently single-user and the background download task needs unattended
+access to Podimo creds — when this constraint is violated at startup a
+warning is logged and the library stays `None`, which makes all `/library`
+routes 404.
 
 ### Audiobook feed flow
 

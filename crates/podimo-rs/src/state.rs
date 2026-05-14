@@ -8,6 +8,7 @@ use reqwest::Client;
 use crate::blocklist::BlockList;
 use crate::cache::Caches;
 use crate::config::Config;
+use crate::library::Library;
 use crate::templates::Templates;
 
 #[derive(Clone)]
@@ -19,6 +20,10 @@ pub struct AppState {
     pub(crate) blocklist: Arc<BlockList>,
     pub(crate) scraper: Client,
     pub(crate) templates: Templates,
+    /// `Some` when `ENABLE_LIBRARY=true`; handlers under `/library/*` reject
+    /// requests with 404 when this is `None`. Public so integration tests can
+    /// seed entries directly without driving the HTTP `/library/add` flow.
+    pub library: Option<Library>,
 }
 
 impl AppState {
@@ -48,12 +53,27 @@ impl AppState {
         }
         let scraper = builder.build()?;
 
+        let library = if config.enable_library {
+            if !config.local_credentials {
+                tracing::warn!(
+                    target: "podimo::library",
+                    "ENABLE_LIBRARY=true requires LOCAL_CREDENTIALS=true — disabling library."
+                );
+                None
+            } else {
+                Some(Library::new(&config.library_dir).await?)
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             config: Arc::new(config),
             caches,
             blocklist,
             scraper,
             templates: Templates::new(),
+            library,
         })
     }
 }

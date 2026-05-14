@@ -28,6 +28,8 @@ async fn healthz_returns_200_json() {
         podcast_cache_time: 60,
         head_cache_time: 60,
         audiobook_audio_cache_time: 60,
+        enable_library: false,
+        library_dir: "./library".into(),
         public_feeds: false,
         graphql_url: "https://example.invalid/graphql".into(),
     };

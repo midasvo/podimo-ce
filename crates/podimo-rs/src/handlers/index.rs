@@ -23,6 +23,7 @@ struct IndexCtx<'a> {
     locales: &'a [&'a str],
     regions: &'a [(&'a str, &'a str)],
     need_credentials: bool,
+    library_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -40,6 +41,7 @@ fn render_with_error(state: &AppState, error: &str) -> Response {
         locales: LOCALES,
         regions: REGIONS,
         need_credentials: !state.config.local_credentials,
+        library_enabled: state.library.is_some(),
     };
     match state.templates.render("index.html", &ctx) {
         Ok(body) => Html(body).into_response(),

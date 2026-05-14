@@ -105,4 +105,11 @@
   <input class="primary" type="submit" value="Create RSS URL &rarr;" />
 </form>
 
+{% if library_enabled %}
+<p class="deck" style="margin-top: 2.5rem;">
+  Prefer to download books directly to disk? Visit your
+  <a href="/library">audiobook library &rarr;</a>
+</p>
+{% endif %}
+
 {% endblock %}

@@ -23,6 +23,8 @@ impl Templates {
             include_str!("../templates/feed_location.html"),
         )
         .expect("feed_location.html embedded");
+        env.add_template("library.html", include_str!("../templates/library.html"))
+            .expect("library.html embedded");
         Self { env: Arc::new(env) }
     }
 

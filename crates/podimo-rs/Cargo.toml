@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net
 futures = "0.3"
 
 # Outbound HTTP
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies", "stream"] }
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }

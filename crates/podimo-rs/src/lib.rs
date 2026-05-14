@@ -7,6 +7,7 @@ pub mod cache;
 pub mod config;
 pub(crate) mod error;
 pub(crate) mod handlers;
+pub mod library;
 pub(crate) mod middleware;
 pub mod podimo;
 pub(crate) mod state;
@@ -25,6 +26,7 @@ pub async fn app(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::index::router())
         .merge(handlers::feed::router())
         .merge(handlers::audiobook::router())
+        .merge(handlers::library::router())
         .fallback(handlers::not_found::fallback)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
