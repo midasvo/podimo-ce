@@ -216,7 +216,10 @@
 
 <div class="library-meta-row">
   <span class="brand"><span class="dot" aria-hidden="true"></span>&nbsp;{{ entries | length }} book{% if entries | length != 1 %}s{% endif %}</span>
-  <a href="/">&larr; Make an RSS feed instead</a>
+  <span>
+    <a href="/setup" style="margin-right: 1.25rem;">Setup &amp; diagnostics</a>
+    <a href="/">&larr; Home</a>
+  </span>
 </div>
 
 {% if entries | length == 0 %}

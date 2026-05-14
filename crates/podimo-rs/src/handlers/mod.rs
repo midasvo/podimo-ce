@@ -5,3 +5,4 @@ pub(crate) mod healthz;
 pub(crate) mod index;
 pub(crate) mod library;
 pub(crate) mod not_found;
+pub(crate) mod setup;

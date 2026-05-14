@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+
+{% block body %}
+<style>
+  .setup-section {
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    padding: 1.25rem 1.4rem;
+    border-radius: 2px;
+    box-shadow: var(--shadow);
+    margin: 0 0 1.5rem;
+  }
+  .setup-section h2 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, serif;
+    font-weight: 600;
+    font-size: 1.15rem;
+    line-height: 1.2;
+    margin: 0 0 0.85rem;
+    color: var(--ink);
+  }
+  .setup-row {
+    display: grid;
+    grid-template-columns: 14ch 1fr auto;
+    gap: 0.65rem 1rem;
+    align-items: baseline;
+    padding: 0.4rem 0;
+    border-top: 1px dashed var(--rule);
+  }
+  .setup-row:first-child { border-top: 0; }
+  .setup-row .label {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .setup-row .value {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88rem;
+    color: var(--ink);
+    word-break: break-all;
+  }
+  .setup-row .value.muted { color: var(--ink-mute); font-style: italic; }
+  .badge {
+    display: inline-block;
+    padding: 0.12rem 0.55rem;
+    border-radius: 999px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .badge.ok { background: color-mix(in srgb, #2c8a4a 28%, transparent); color: #2c8a4a; }
+  .badge.warn { background: color-mix(in srgb, #c98800 28%, transparent); color: #c98800; }
+  .badge.fail { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
+  .badge.neutral { background: color-mix(in srgb, var(--ink-mute) 22%, transparent); color: var(--ink-soft); }
+  .checks {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+    gap: 0.55rem;
+    margin: 0.6rem 0 0;
+  }
+  .checks .check {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.45rem 0.6rem;
+    background: var(--field-bg);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+  }
+  .check .k {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .check .v {
+    font-family: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, serif;
+    font-style: italic;
+    color: var(--ink);
+    font-size: 0.95rem;
+  }
+  .test-form {
+    display: grid;
+    gap: 0.65rem;
+    margin-top: 1rem;
+  }
+  .test-form .row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .test-form input[type="text"] {
+    flex: 1 1 18rem;
+    min-width: 0;
+  }
+  .test-form button {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 7.5rem;
+  }
+  .hint-block {
+    font-family: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, serif;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    margin: 0.65rem 0 0;
+    font-size: 0.95rem;
+  }
+  .hint-block code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82rem;
+    color: var(--ink);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+    padding: 0.05rem 0.35rem;
+    border-radius: 3px;
+  }
+  .nav-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 1.5rem 0 1rem;
+  }
+  .nav-row a {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--rule);
+    padding-bottom: 0.1rem;
+  }
+  .nav-row a:hover { color: var(--accent); border-color: var(--accent); }
+</style>
+
+<h1 class="headline">Setup<br /><em>library diagnostics.</em></h1>
+
+<p class="deck">
+  Verify that the configured <code>LIBRARY_DIR</code> is reachable from inside
+  the container, and probe alternative paths before you commit to a mount.
+</p>
+
+<div class="nav-row">
+  <span></span>
+  <a href="/">&larr; Home</a>
+</div>
+
+<section class="setup-section">
+  <h2>Library status</h2>
+  <div class="setup-row">
+    <span class="label">Enable_Library</span>
+    <span class="value">{{ enable_library }}</span>
+    {% if enable_library and library_active %}
+      <span class="badge ok">Active</span>
+    {% elif enable_library and not library_active %}
+      <span class="badge warn">Disabled (see below)</span>
+    {% else %}
+      <span class="badge neutral">Off</span>
+    {% endif %}
+  </div>
+  <div class="setup-row">
+    <span class="label">Local_Credentials</span>
+    <span class="value">{{ local_credentials_on }}</span>
+    {% if local_credentials_on %}
+      <span class="badge ok">OK</span>
+    {% else %}
+      <span class="badge warn">Required for library</span>
+    {% endif %}
+  </div>
+  <div class="setup-row">
+    <span class="label">Library_Dir</span>
+    <span class="value">{{ library_dir }}</span>
+    <span class="badge {{ library_check.summary_kind }}">{{ library_check.summary }}</span>
+  </div>
+  {% if entry_count is not none %}
+  <div class="setup-row">
+    <span class="label">Entries</span>
+    <span class="value">{{ entry_count }} book{% if entry_count != 1 %}s{% endif %}</span>
+    <span></span>
+  </div>
+  <div class="setup-row">
+    <span class="label">Total size</span>
+    <span class="value">{{ total_size_mb }}</span>
+    <span></span>
+  </div>
+  {% endif %}
+
+  <div class="checks">
+    <div class="check">
+      <span class="k">Exists</span>
+      <span class="v">{% if library_check.exists %}yes{% else %}no{% endif %}</span>
+    </div>
+    <div class="check">
+      <span class="k">Is dir</span>
+      <span class="v">{% if library_check.is_dir %}yes{% else %}no{% endif %}</span>
+    </div>
+    <div class="check">
+      <span class="k">Writable</span>
+      <span class="v">{% if library_check.writable %}yes{% else %}no{% endif %}</span>
+    </div>
+    <div class="check">
+      <span class="k">Readable</span>
+      <span class="v">{% if library_check.readable %}yes{% else %}no{% endif %}</span>
+    </div>
+  </div>
+
+  {% if library_check.error %}
+  <p class="hint-block"><strong>Error:</strong> {{ library_check.error }}</p>
+  {% endif %}
+
+  {% if requires_local_credentials %}
+  <p class="hint-block">
+    <strong>Library is gated.</strong> <code>ENABLE_LIBRARY=true</code> needs
+    <code>LOCAL_CREDENTIALS=true</code> — the background download task uses
+    your global Podimo creds. Set both in <code>.env</code> and restart.
+  </p>
+  {% endif %}
+</section>
+
+<section class="setup-section">
+  <h2>Probe another path</h2>
+  <p class="hint-block">
+    Type any path that's visible from inside the container (typically a
+    volume-mounted directory). Probing creates and removes a tiny temp file
+    to verify write + read.
+  </p>
+  <form class="test-form" action="/setup/test-path" method="post" autocomplete="off">
+    <div class="row">
+      <input
+        type="text"
+        name="path"
+        placeholder="/data/library"
+        {% if test_path %}value="{{ test_path }}"{% endif %}
+        spellcheck="false"
+        autocapitalize="off"
+        autocorrect="off"
+      />
+      <button type="submit" class="primary">Probe path &rarr;</button>
+    </div>
+  </form>
+
+  {% if test_result %}
+  <div class="setup-row" style="margin-top: 1rem;">
+    <span class="label">Probe result</span>
+    <span class="value">{{ test_result.path }}</span>
+    <span class="badge {{ test_result.summary_kind }}">{{ test_result.summary }}</span>
+  </div>
+  <div class="checks">
+    <div class="check">
+      <span class="k">Exists</span>
+      <span class="v">{% if test_result.exists %}yes{% else %}no{% endif %}</span>
+    </div>
+    <div class="check">
+      <span class="k">Is dir</span>
+      <span class="v">{% if test_result.is_dir %}yes{% else %}no{% endif %}</span>
+    </div>
+    <div class="check">
+      <span class="k">Writable</span>
+      <span class="v">{% if test_result.writable %}yes{% else %}no{% endif %}</span>
+    </div>
+    <div class="check">
+      <span class="k">Readable</span>
+      <span class="v">{% if test_result.readable %}yes{% else %}no{% endif %}</span>
+    </div>
+  </div>
+  {% if test_result.error %}
+  <p class="hint-block"><strong>Error:</strong> {{ test_result.error }}</p>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section class="setup-section">
+  <h2>How to change <code>LIBRARY_DIR</code></h2>
+  <p class="hint-block">
+    The path itself is configured via the <code>LIBRARY_DIR</code> environment
+    variable (read once at startup). To switch:
+  </p>
+  <ol style="font-family: 'Iowan Old Style', Charter, Georgia, serif; color: var(--ink-soft); margin: 0.4rem 0 0 1.2rem; padding: 0;">
+    <li>Edit <code>.env</code> (or your compose file's env block) to point at
+      the new path.</li>
+    <li>Make sure the same path is volume-mounted into the container.</li>
+    <li>Probe the candidate path above to confirm.</li>
+    <li>Restart the container.</li>
+  </ol>
+</section>
+{% endblock %}
