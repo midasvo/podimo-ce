@@ -195,20 +195,12 @@ pub async fn audiobook_to_rss(
         .build();
 
     let mut item_description = description.clone();
-    if !narrators_str.is_empty() {
-        if !item_description.is_empty() {
-            item_description.push_str("\n\n");
-        }
-        item_description.push_str("Verteld door: ");
-        item_description.push_str(&narrators_str);
-    }
-    if let Some(p) = &publisher {
-        if !item_description.is_empty() {
-            item_description.push_str("\n\n");
-        }
-        item_description.push_str("Uitgever: ");
-        item_description.push_str(p);
-    }
+    append_section(&mut item_description, "Verteld door: ", &narrators_str);
+    append_section(
+        &mut item_description,
+        "Uitgever: ",
+        publisher.as_deref().unwrap_or(""),
+    );
 
     let pub_date = year.map(|y| format!("Thu, 01 Jan {y} 00:00:00 +0000"));
 
@@ -276,6 +268,20 @@ pub async fn audiobook_to_rss(
 
     let channel = channel.build();
     Ok(channel.to_string())
+}
+
+/// Appends `"{label}{value}"` to `buf`, separated from any existing content by
+/// a blank line. No-op when `value` is empty so callers can pass optional
+/// metadata without conditionals at the call site.
+fn append_section(buf: &mut String, label: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if !buf.is_empty() {
+        buf.push_str("\n\n");
+    }
+    buf.push_str(label);
+    buf.push_str(value);
 }
 
 fn collect_name_array(v: Option<&Value>) -> Option<String> {
